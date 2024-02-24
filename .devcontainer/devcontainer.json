@@ -1,0 +1,82 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+{
+  "name": "trading23_ml",
+  "build": {
+    // Update 'dockerFile' and 'context' if they are in a subfolder
+    "context": "..",
+    // Update the 'dockerFile' property if you aren't using the standard 'Dockerfile' filename.
+    "dockerfile": "../Dockerfile"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
+  "workspaceFolder": "/app",
+  "mounts": ["source=${localEnv:HOME}/dev/data,target=/data,type=bind"],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "GitHub.github-vscode-theme",
+        "eamodio.gitlens",
+        "oderwat.indent-rainbow",
+        "PKief.material-icon-theme",
+        "wmaurer.change-case",
+        "mechatroner.rainbow-csv",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "esbenp.prettier-vscode"
+      ]
+    },
+    "settings": {
+      "editor.bracketPairColorization.enabled": true,
+      "editor.copyWithSyntaxHighlighting": false,
+      "editor.cursorStyle": "block",
+      "editor.fontFamily": "FiraCode NF, Menlo, Monaco, 'Courier New', monospace",
+      "editor.formatOnSave": true,
+      "editor.inlineSuggest.enabled": true,
+      "editor.linkedEditing": true,
+      "files.autoGuessEncoding": true,
+      "files.autoSave": "onFocusChange",
+      "files.encoding": "utf8",
+      "git.autofetch": true,
+      "github.copilot.enable": {
+        "*": true
+      },
+      "workbench.colorTheme": "GitHub Dark Dimmed",
+      "workbench.iconTheme": "material-icon-theme",
+      // python
+      "python.analysis.diagnosticMode": "workspace",
+      "python.analysis.inlayHints.functionReturnTypes": true,
+      "python.analysis.inlayHints.variableTypes": true,
+      "python.analysis.typeCheckingMode": "basic",
+      "[python]": {
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff"
+        // "editor.tabSize": 4,
+      },
+      "[jsonc]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  }
+
+  // Features to add to the dev container. More info: https://containers.dev/features.
+  // "features": {},
+
+  // Use 'forwardPorts' to make a list of ports inside the container available locally.
+  // "forwardPorts": [],
+
+  // Uncomment the next line to run commands after the container is created.
+  // "postCreateCommand": "cat /etc/os-release",
+
+  // Configure tool-specific properties.
+  // "customizations": {},
+
+  // Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
+  // "remoteUser": "devcontainer"
+}
