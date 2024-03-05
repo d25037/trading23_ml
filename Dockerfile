@@ -1,9 +1,15 @@
-FROM tensorflow/tensorflow:latest-gpu
+FROM nvidia/cuda:12.2.2-devel-ubuntu22.04
 
 WORKDIR /app
 COPY . .
 
-RUN apt update && apt install -y vim zsh git curl bat fzf build-essential procps file
+# set up python
+RUN apt update && apt install -y python3 python3-pip
+RUN pip install --upgrade pip
+RUN pip install uv
+RUN uv venv && uv pip install -r requirements.txt
+
+RUN apt update && apt install -y vim zsh git curl bat fzf sqlite
 
 # set up bat
 RUN mkdir -p ~/.local/bin
@@ -21,17 +27,6 @@ RUN cargo install zoxide --locked
 
 # install eza
 RUN cargo install eza
-
-# # install brew
-# RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" | sh -s -- --yes
-# RUN echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> $HOME/.profile
-# RUN eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-
-# nvim
-# RUN curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz
-# RUN rm -rf /opt/nvim
-# RUN tar -C /opt -xzf nvim-linux64.tar.gz
-# RUN git clone --depth 1 https://github.com/AstroNvim/AstroNvim ~/.config/nvim
 
 RUN ln -s /app/.zshrc /root/.zshrc
 RUN chsh -s /usr/bin/zsh

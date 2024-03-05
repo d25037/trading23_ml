@@ -1,6 +1,9 @@
-# linuxbrew
-export PATH="$PATH:/opt/nvim-linux64/bin"
-# eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+# # linuxbrew
+# export PATH="$PATH:/opt/nvim-linux64/bin"
+# # eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+
+# TimeZone
+export TZ="Asia/Tokyo"
 
 # rust
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -32,3 +35,6 @@ function chpwd() {el}
 alias o=open
 alias a=touch
 alias ..='z ..'
+
+# uv venv
+export VIRTUAL_ENV="/app/.venv"

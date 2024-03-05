@@ -10,7 +10,7 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
   "workspaceFolder": "/app",
-  "mounts": ["source=${localEnv:HOME}/dev/data,target=/data,type=bind"],
+  "mounts": ["source=${localEnv:HOME}/data,target=/data,type=bind"],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -63,7 +63,8 @@
         "editor.defaultFormatter": "esbenp.prettier-vscode"
       }
     }
-  }
+  },
+  "runArgs": ["--gpus", "all"]
 
   // Features to add to the dev container. More info: https://containers.dev/features.
   // "features": {},

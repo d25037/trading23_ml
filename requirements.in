@@ -1,0 +1,9 @@
+torch
+numpy
+pandas
+pandas-stubs
+matplotlib
+mplfinance
+requests
+types-requests
+pydantic
