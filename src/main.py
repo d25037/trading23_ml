@@ -1,18 +1,18 @@
 from typer import Typer
 
-# import analyzer
+import analyzer
 import database
 import fetcher
 
 app = Typer()
 app.add_typer(fetcher.app, name="fetcher")
+app.add_typer(analyzer.app, name="analyzer")
 
 
-# def main():
-#     print(f"Is CUDA available? {analyzer.is_cudable()}")
-#     print("--------------------")
-
-#     fetcher.fetch_daily_quotes_of_nikkei225_to_db()
+@app.command()
+def main():
+    # analyzer.dataset_reader()
+    analyzer.analyzer("day5")
 
 
 if __name__ == "__main__":

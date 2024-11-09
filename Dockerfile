@@ -3,17 +3,16 @@ FROM nvidia/cuda:12.2.2-devel-ubuntu22.04
 WORKDIR /app
 COPY . .
 
-# set up python
-COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /uvx /bin/
-RUN uv python install 3.12
+RUN apt update && apt install -y python3 python3-pip vim zsh git curl bat fzf sqlite
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # set up python
-# RUN apt update && apt install -y python3 python3-pip
+RUN uv python install 3.12
+# RUN apt install -y python3 python3-pip
 # RUN pip install --upgrade pip
-# RUN pip install uv
+# RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN uv venv && uv pip install -r requirements.txt
 
-RUN apt update && apt install -y vim zsh git curl bat fzf sqlite
 
 # set up bat
 RUN mkdir -p ~/.local/bin

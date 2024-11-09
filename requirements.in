@@ -7,3 +7,6 @@ mplfinance
 requests
 types-requests
 pydantic
+polar
+typer
+loguru
