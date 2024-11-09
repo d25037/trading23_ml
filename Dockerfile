@@ -4,9 +4,13 @@ WORKDIR /app
 COPY . .
 
 # set up python
-RUN apt update && apt install -y python3 python3-pip
-RUN pip install --upgrade pip
-RUN pip install uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /uvx /bin/
+RUN uv python install 3.12
+
+# set up python
+# RUN apt update && apt install -y python3 python3-pip
+# RUN pip install --upgrade pip
+# RUN pip install uv
 RUN uv venv && uv pip install -r requirements.txt
 
 RUN apt update && apt install -y vim zsh git curl bat fzf sqlite
