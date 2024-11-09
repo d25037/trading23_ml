@@ -38,3 +38,5 @@ alias ..='z ..'
 
 # uv venv
 export VIRTUAL_ENV="/app/.venv"
+
+# test
