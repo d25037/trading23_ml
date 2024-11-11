@@ -16,6 +16,16 @@ class IdToken(BaseModel):
     id_token: str = Field(alias="idToken")
 
 
+class Ohlc(BaseModel):
+    code: str = Field(alias="Code")
+    date: str = Field(alias="Date")
+    open: float | None = Field(alias="AdjustmentOpen")
+    high: float | None = Field(alias="AdjustmentHigh")
+    low: float | None = Field(alias="AdjustmentLow")
+    close: float | None = Field(alias="AdjustmentClose")
+    volume: float | None = Field(alias="AdjustmentVolume")
+
+
 class OhlcPremium(BaseModel):
     code: str = Field(alias="Code")
     date: str = Field(alias="Date")
@@ -29,24 +39,12 @@ class OhlcPremium(BaseModel):
 
 
 class DailyQuotes(BaseModel):
-    daily_quotes: list[OhlcPremium]
+    daily_quotes: list[Ohlc]
 
 
 class Result(BaseModel):
     code: str
     date: str
-    day1_morning: float
-    day1_allday: float
-    day5: float
-    day20: float
-
-
-class ResultWoVolume(BaseModel):
-    code: str
-    date: str
-    standardized_diff: float
-    day1_morning: float
-    day1_allday: float
-    day5: float
-    day20: float
+    nextday_open: float
+    nextday_close: float
     image: bytes

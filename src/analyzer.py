@@ -2,12 +2,16 @@ import io
 import os
 import random
 import time
+from sys import stderr
+from time import sleep
 
 import mplfinance as mpf
 import pandas as pd
+import polars as pl
 import torch
 import torch.utils.data
 import torchvision
+from loguru import logger
 from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, random_split
@@ -17,7 +21,7 @@ import database
 import fetcher
 import models
 
-app = Typer()
+app = Typer(no_args_is_help=True)
 
 
 @app.command("cudable")
@@ -30,14 +34,44 @@ def is_cudable() -> None:
         print("ERROR: CUDA is unavailable")
 
 
-def create_candlestick_chart_to_png(df: pd.DataFrame, code: str, file_name: str):
-    dir_path = f"/data/data_set/{code}"
+@app.command()
+def test(code: str):
+    stock = fetcher.fetch_daily_quotes(code)
+    if stock is None:
+        return
+
+    j = 675
+
+    date = stock[j - 1]["date"].item()
+    close = stock[j - 1]["close"].item()
+
+    nextday = stock[j]
+    nextday_open = nextday["open"].item()
+    nextday_close = nextday["close"].item()
+    result_open = round(100 * (nextday_open - close) / close, 2)
+    result_close = round(100 * (nextday_close - close) / close, 2)
+
+    print(nextday)
+    print(f"date: {date}")
+    print(f"close: {close}")
+    print(f"result_open: {result_open}")
+    print(f"result_close: {result_close}")
+
+    stock_sliced = stock.slice(j - 10, 10)
+    df = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
+    print(df)
+    create_candlestick_chart(df, code, "test")
+
+
+def create_candlestick_chart(df: pl.DataFrame, code: str, file_name: str):
+    dir_path = f"./data/img/{code}"
     os.makedirs(dir_path, exist_ok=True)
 
-    df.loc[:, "date"] = pd.to_datetime(df["date"]).infer_objects()
-
     # DataFrameをmplfinanceの形式に変換
-    ohlc_data = df[["date", "open", "high", "low", "close", "volume"]].set_index("date")
+    df_pd: pd.DataFrame = df.to_pandas()
+    ohlc_data = df_pd[["date", "open", "high", "low", "close", "volume"]].set_index(
+        "date"
+    )
 
     # ローソク足チャートの描画
     fig, axlist = mpf.plot(
@@ -50,27 +84,29 @@ def create_candlestick_chart_to_png(df: pd.DataFrame, code: str, file_name: str)
     )
 
     # 横軸と縦軸の目盛りを非表示にする
-    ax = axlist[0]  # axlistはリストなので、最初の要素を取得
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    # # 出来高軸を取得
-    # ax_volume = axlist[1]
-    # # 出来高軸のラベルを非表示にする
-    # ax_volume.set_xticks([])
-    # ax_volume.set_yticks([])
+    for ax in axlist:
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     # チャートを画像として保存
     fig.savefig(f"{dir_path}/{file_name}.png")
 
-    return
+    # figをPNG形式に変換
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+
+    # PNGデータをBLOB型に変換
+    image = buf.getvalue()
+
+    return image
 
 
-def create_candlestick_chart_to_bytes(df: pd.DataFrame):
-    df.loc[:, "date"] = pd.to_datetime(df["date"]).infer_objects()
-
+def create_candlestick_chart_to_bytes(df: pl.DataFrame):
     # DataFrameをmplfinanceの形式に変換
-    ohlc_data = df[["date", "open", "high", "low", "close"]].set_index("date")
+    df_pd: pd.DataFrame = df.to_pandas()
+    ohlc_data = df_pd[["date", "open", "high", "low", "close", "volume"]].set_index(
+        "date"
+    )
 
     # ローソク足チャートの描画
     fig, axlist = mpf.plot(
@@ -96,99 +132,53 @@ def create_candlestick_chart_to_bytes(df: pd.DataFrame):
     return image
 
 
+@app.command()
 def create_data_set():
+    logger.remove()
+    logger.add(stderr, level="INFO")
+
     conn = database.open_db()
 
     nikkei225 = fetcher.load_nikkei225_csv()
-    for i in range(len(nikkei225)):
-        code = str(nikkei225.iloc[i, 0])
-        df = database.select_ohlc_by_code(conn, code)
-        df = df.dropna()
+    numbers = random.sample(range(20, 1100), 100)
 
-        limit = len(df)
-        numbers = random.sample(range(70, limit - 30), 20)
-        for j in numbers:
-            file_name = str(df.iloc[j]["date"])
-            df_sampled = df[j - 60 : j]
-            atr = get_atr(df_sampled.tail())
-            create_candlestick_chart_to_png(df_sampled, code, file_name)
+    i = 1
+    for code in nikkei225.get_column("code"):
+        df = fetcher.fetch_daily_quotes(code)
+        if df is None:
+            continue
 
-            row_1 = df.iloc[j + 1]
-            day1_morning = round((row_1["morning_close"] - row_1["open"]) / atr, 2)
-            day1_allday = round((row_1["close"] - row_1["open"]) / atr, 2)
+        for number in numbers:
+            file_name = df[number - 1]["date"].item()
+            close = df[number - 1]["close"].item()
 
-            row_5 = df.iloc[j + 5]
-            day5 = round((row_5["close"] - row_1["open"]) / atr, 2)
+            nextday = df[number]
+            nextday_open = nextday["open"].item()
+            nextday_close = nextday["close"].item()
+            result_open = round(100 * (nextday_open - close) / close, 2)
+            result_close = round(100 * (nextday_close - close) / close, 2)
 
-            row_20 = df.iloc[j + 20]
-            day20 = round((row_20["close"] - row_1["open"]) / atr, 2)
+            stock_sliced = df.slice(number - 10, 10)
+            df_sampled = stock_sliced.with_columns(
+                pl.col("date").str.to_date().alias("date")
+            )
+            img = create_candlestick_chart(df_sampled, code, file_name)
 
             result = models.Result(
                 **{
-                    "code": code,
+                    "code": str(code),
                     "date": file_name,
-                    "day1_morning": day1_morning,
-                    "day1_allday": day1_allday,
-                    "day5": day5,
-                    "day20": day20,
+                    "nextday_open": result_open,
+                    "nextday_close": result_close,
+                    "image": img,
                 }
             )
 
             database.insert_result(conn, result)
 
         if i % 10 == 0:
-            print(f"i: {i}")
-
-    return
-
-
-def create_data_set_wo_volume():
-    conn = database.open_db()
-
-    nikkei225 = fetcher.load_nikkei225_csv()
-    for i in range(len(nikkei225)):
-        code = str(nikkei225.iloc[i, 0])
-        df = database.select_ohlc_by_code(conn, code)
-        df = df.dropna()
-
-        limit = len(df)
-        numbers = random.sample(range(70, limit - 30), 100)
-        for j in numbers:
-            file_name = str(df.iloc[j]["date"])
-            df_sampled = df[j - 60 : j]
-
-            standardized_diff = get_standardized_diff(df_sampled)
-
-            atr = get_atr(df_sampled.tail())
-            image = create_candlestick_chart_to_bytes(df_sampled)
-
-            row_1 = df.iloc[j + 1]
-            day1_morning = round((row_1["morning_close"] - row_1["open"]) / atr, 2)
-            day1_allday = round((row_1["close"] - row_1["open"]) / atr, 2)
-
-            row_5 = df.iloc[j + 5]
-            day5 = round((row_5["close"] - row_1["open"]) / atr, 2)
-
-            row_20 = df.iloc[j + 20]
-            day20 = round((row_20["close"] - row_1["open"]) / atr, 2)
-
-            result = models.ResultWoVolume(
-                **{
-                    "code": code,
-                    "date": file_name,
-                    "standardized_diff": standardized_diff,
-                    "day1_morning": day1_morning,
-                    "day1_allday": day1_allday,
-                    "day5": day5,
-                    "day20": day20,
-                    "image": image,
-                }
-            )
-
-            database.insert_result_wo_volume(conn, result)
-
-        if i % 5 == 0:
-            print(f"i: {i}")
+            logger.info(f"{i}/225 has been processed.")
+        i += 1
 
     return
 
@@ -245,7 +235,7 @@ class SQLiteDataset(Dataset):
 
     def __getitem__(self, index):
         self.cursor.execute(
-            f"SELECT image, {self.label} FROM result_wo_volume WHERE standardized_diff<0.12 LIMIT 1 OFFSET ?",
+            f"SELECT image, {self.label} FROM result LIMIT 1 OFFSET ?",
             (index,),
         )
         image_data, label = self.cursor.fetchone()
@@ -255,9 +245,7 @@ class SQLiteDataset(Dataset):
         return image, label
 
     def __len__(self):
-        self.cursor.execute(
-            "SELECT COUNT(*) FROM result_wo_volume WHERE standardized_diff<0.12"
-        )
+        self.cursor.execute("SELECT COUNT(*) FROM result")
         return self.cursor.fetchone()[0]
 
 

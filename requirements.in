@@ -1,4 +1,5 @@
 torch
+torchvision
 numpy
 pandas
 pandas-stubs
@@ -7,6 +8,7 @@ mplfinance
 requests
 types-requests
 pydantic
-polar
+polars
 typer
 loguru
+pill
