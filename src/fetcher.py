@@ -1,17 +1,13 @@
+import datetime
 import json
-from time import sleep
 
-# import pandas as pd
 import polars as pl
 import requests
 from loguru import logger
 from typer import Typer
 
-import database
+import constants
 import models
-
-APP_SETTINGS_PATH = "./app_settings.json"
-NIKKEI225_PATH = "./data/nikkei225.csv"
 
 app = Typer(no_args_is_help=True)
 
@@ -25,7 +21,7 @@ def test():
 
 @app.command()
 def load_settings():
-    with open(f"{APP_SETTINGS_PATH}", "r") as f:
+    with open(f"{constants.APP_SETTINGS_PATH}", "r") as f:
         items = models.AppSettings(**json.load(f))
         logger.debug(items)
         return items
@@ -33,7 +29,7 @@ def load_settings():
 
 @app.command("load-nikkei225")
 def load_nikkei225_csv() -> pl.DataFrame:
-    with open(f"{NIKKEI225_PATH}") as f:
+    with open(f"{constants.NIKKEI225_PATH}") as f:
         df = pl.read_csv(f)
         logger.debug(df)
     return df
@@ -63,10 +59,10 @@ def fetch_refresh_token():
 
     refresh_token = models.RefreshToken(**r_post.json()).refresh_token
     app_settings.refresh_token = refresh_token
-    with open(f"{APP_SETTINGS_PATH}", "w") as f:
+    with open(f"{constants.APP_SETTINGS_PATH}", "w") as f:
         json.dump(app_settings.model_dump(), f)
 
-    logger.info(f"Refresh token was saved to {APP_SETTINGS_PATH}")
+    logger.info(f"Refresh token was saved to {constants.APP_SETTINGS_PATH}")
 
 
 @app.command()
@@ -88,10 +84,10 @@ def fetch_id_token():
 
     id_token = models.IdToken(**r_post.json()).id_token
     app_settings.id_token = id_token
-    with open(f"{APP_SETTINGS_PATH}", "w") as f:
+    with open(f"{constants.APP_SETTINGS_PATH}", "w") as f:
         json.dump(app_settings.model_dump(), f)
 
-    logger.info(f"ID token was saved to {APP_SETTINGS_PATH}")
+    logger.info(f"ID token was saved to {constants.APP_SETTINGS_PATH}")
 
 
 @app.command()
@@ -120,25 +116,39 @@ def fetch_daily_quotes(code: str):
     return pl.DataFrame(daily_quotes.model_dump()["daily_quotes"])
 
 
-def fetch_daily_quotes_of_nikkei225_to_db():
-    nikkei225 = load_nikkei225_csv()
-    for code in nikkei225.get_column("code"):
-        df = fetch_daily_quotes(code)
-        if df is None:
-            continue
-        database.insert_ohlc(df)
-        print(f"Inserted {code} to database.")
-        sleep(1)
+# def fetch_daily_quotes_of_nikkei225_to_db():
+#     nikkei225 = load_nikkei225_csv()
+#     for code in nikkei225.get_column("code"):
+#         df = fetch_daily_quotes(code)
+#         if df is None:
+#             continue
+#         database.insert_ohlc(df)
+#         print(f"Inserted {code} to database.")
+#         sleep(1)
 
 
+@app.command()
 def fetch_trading_calender():
     app_settings = load_settings()
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+    day_before_1600 = today - datetime.timedelta(days=1600)
+    # today -> YYYY-MM-DD
+    yesterday = yesterday.strftime("%Y-%m-%d")
+    day_before_1600 = day_before_1600.strftime("%Y-%m-%d")
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
-    params = {"holidaydivision": 1, "from": "2022-01-01", "to": "2022-12-31"}
+    params = {"holidaydivision": 1, "from": f"{day_before_1600}", "to": f"{yesterday}"}
 
     r = requests.get(
         "https://api.jquants.com/v1/markets/trading_calendar",
         headers=headers,
         params=params,
     )
-    print(r.json())
+    lf = pl.LazyFrame(r.json().get("trading_calendar"))
+    logger.debug(f"len: {len(lf.collect())}")
+    df = lf.select("Date").collect().sample(10).sort("Date")
+    logger.debug(f"len: {df}")
+
+    # logger.debug(df)
+    # logger.debug(f"len: {df}")
+    return

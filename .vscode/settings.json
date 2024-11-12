@@ -1,9 +1,21 @@
 {
-    "cSpell.words": [
-        "cudable",
-        "loguru",
-        "mailaddress",
-        "refreshtoken",
-        "typer"
-    ]
+	"cSpell.words": [
+		"chunksize",
+		"cudable",
+		"dtype",
+		"figsize",
+		"holidaydivision",
+		"loguru",
+		"mailaddress",
+		"mplfinance",
+		"nextday",
+		"optim",
+		"refreshtoken",
+		"relu",
+		"returnfig",
+		"torchvision",
+		"typer",
+		"xticks",
+		"yticks"
+	]
 }

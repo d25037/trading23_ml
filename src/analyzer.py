@@ -3,8 +3,8 @@ import os
 import random
 import time
 from sys import stderr
-from time import sleep
 
+import matplotlib.pyplot
 import mplfinance as mpf
 import pandas as pd
 import polars as pl
@@ -40,7 +40,7 @@ def test(code: str):
     if stock is None:
         return
 
-    j = 675
+    j = 920
 
     date = stock[j - 1]["date"].item()
     close = stock[j - 1]["close"].item()
@@ -60,13 +60,12 @@ def test(code: str):
     stock_sliced = stock.slice(j - 10, 10)
     df = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
     print(df)
-    create_candlestick_chart(df, code, "test")
+    create_candlestick_chart(df, code, "test", write=True)
 
 
-def create_candlestick_chart(df: pl.DataFrame, code: str, file_name: str):
-    dir_path = f"./data/img/{code}"
-    os.makedirs(dir_path, exist_ok=True)
-
+def create_candlestick_chart(
+    df: pl.DataFrame, code: str, file_name: str, write: bool = False
+):
     # DataFrameをmplfinanceの形式に変換
     df_pd: pd.DataFrame = df.to_pandas()
     ohlc_data = df_pd[["date", "open", "high", "low", "close", "volume"]].set_index(
@@ -74,7 +73,7 @@ def create_candlestick_chart(df: pl.DataFrame, code: str, file_name: str):
     )
 
     # ローソク足チャートの描画
-    fig, axlist = mpf.plot(
+    fig, ax_list = mpf.plot(
         ohlc_data,
         type="candle",
         volume=True,
@@ -84,12 +83,15 @@ def create_candlestick_chart(df: pl.DataFrame, code: str, file_name: str):
     )
 
     # 横軸と縦軸の目盛りを非表示にする
-    for ax in axlist:
+    for ax in ax_list:
         ax.set_xticks([])
         ax.set_yticks([])
 
     # チャートを画像として保存
-    fig.savefig(f"{dir_path}/{file_name}.png")
+    if write:
+        dir_path = f"./data/img/{code}"
+        os.makedirs(dir_path, exist_ok=True)
+        fig.savefig(f"{dir_path}/{file_name}.png")
 
     # figをPNG形式に変換
     buf = io.BytesIO()
@@ -98,36 +100,10 @@ def create_candlestick_chart(df: pl.DataFrame, code: str, file_name: str):
     # PNGデータをBLOB型に変換
     image = buf.getvalue()
 
-    return image
-
-
-def create_candlestick_chart_to_bytes(df: pl.DataFrame):
-    # DataFrameをmplfinanceの形式に変換
-    df_pd: pd.DataFrame = df.to_pandas()
-    ohlc_data = df_pd[["date", "open", "high", "low", "close", "volume"]].set_index(
-        "date"
-    )
-
-    # ローソク足チャートの描画
-    fig, axlist = mpf.plot(
-        ohlc_data,
-        type="candle",
-        style="yahoo",
-        figsize=(3, 3),
-        returnfig=True,
-    )
-
-    # 横軸と縦軸の目盛りを非表示にする
-    ax = axlist[0]  # axlistはリストなので、最初の要素を取得
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    # figをPNG形式に変換
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png")
-
-    # PNGデータをBLOB型に変換
+    buf.seek(0)
     image = buf.getvalue()
+    buf.close()
+    matplotlib.pyplot.close(fig)
 
     return image
 
@@ -146,6 +122,9 @@ def create_data_set():
     for code in nikkei225.get_column("code"):
         df = fetcher.fetch_daily_quotes(code)
         if df is None:
+            continue
+        if len(df) < 1100:
+            logger.info(f"{code} Data length is not enough: {len(df)}")
             continue
 
         for number in numbers:
@@ -183,39 +162,30 @@ def create_data_set():
     return
 
 
-def get_atr(df: pd.DataFrame):
-    df["high-low"] = df["high"] - df["low"]
-    sum = df["high-low"].sum()
-    atr = sum / len(df)
-    # print(df)
-    # print(atr)
-    return atr
-
-
-def get_standardized_diff(df: pd.DataFrame):
-    df["high-low"] = df["high"] - df["low"]
-    highetst_high = df["high"].max()
-    lowest_low = df["low"].min()
-    average_diff = df["high-low"].mean()
-
-    standardized_diff = average_diff / (highetst_high - lowest_low)
-
-    return round(standardized_diff, 3)
-
-
-def img_reader():
+@app.command()
+def img_reader(write: bool = False):
     conn = database.open_db()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT image, day1_allday FROM result LIMIT 1")
+    cursor.execute("SELECT image, nextday_close FROM result LIMIT 1")
     image_data, label = cursor.fetchone()
 
     img = Image.open(io.BytesIO(image_data))
 
-    print(f"img.format: {img.format}")
-    print(f"img.size  : {img.size}")
-    print(f"img.mode  : {img.mode}")
-    print(f"label    : {label}")
+    logger.info(f"img.format: {img.format}")  # PNG
+    logger.info(f"img.size  : {img.size}")  # (300, 300)
+    logger.info(f"img.mode  : {img.mode}")  # RGBA
+    logger.info(f"label    : {label}")
+
+    # Convert RGBA to RGB if the image has an alpha channel
+    if img.mode == "RGBA":
+        img = img.convert("RGB")
+
+    # Save the image as PNG
+    path = "./data/output.png"
+    img.save(f"{path}", "PNG")
+    logger.info(f"Image has been saved as PNG to {path}")
+    return
 
 
 def dataset_reader():

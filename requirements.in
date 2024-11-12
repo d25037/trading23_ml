@@ -11,4 +11,3 @@ pydantic
 polars
 typer
 loguru
-pill
