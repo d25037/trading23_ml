@@ -278,11 +278,15 @@ def analyzer(label: str):
 
     # dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
+    # CUDAが使える場合は使う
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # モデルのインスタンス化
     model = CNNModel()
-    loss_fn = nn.MSELoss()  # 回帰なので平均二乗誤差
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = CNNModel().to(device)
+
+    loss_fn = nn.CrossEntropyLoss()  # 分類なのでクロスエントロピー
+    # loss_fn = nn.MSELoss()  # 回帰なので平均二乗誤差
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.0001)
 
     for epoch in range(max_epoch):
@@ -295,7 +299,7 @@ def analyzer(label: str):
             loss.backward()
             optimizer.step()
 
-        print(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+        logger.info(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
 
         # テストデータでの評価
         if epoch % 3 == 0:
@@ -305,12 +309,12 @@ def analyzer(label: str):
                     outputs = model(images)
                     test_loss = loss_fn(outputs, labels.float().view(-1, 1))
 
-            print(f"Epoch {epoch + 1}(Test), Loss: {test_loss.item():.4f}")
+            logger.info(f"Epoch {epoch + 1}(Test), Loss: {test_loss.item():.4f}")
 
     torch.save(model.state_dict(), "model.pth")
 
     # 経過時間
     elapsed_time = time.time() - start
-    print(f"elapsed_time: {elapsed_time:.2f}")
+    logger.info(f"elapsed_time: {elapsed_time:.2f}")
 
     return
