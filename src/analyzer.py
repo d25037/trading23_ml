@@ -63,6 +63,31 @@ def test(code: str):
     create_candlestick_chart(df, code, "test", write=True)
 
 
+@app.command()
+def test2(label: str):
+    batch_size = 128
+
+    dataset = SQLiteDataset(label)
+    n_samples = len(dataset)
+    n_train = int(0.75 * n_samples)
+    n_test = n_samples - n_train
+    train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
+
+    # ランダムサンプリング
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    # CUDAが使える場合は使う
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    for images, labels in train_dataloader:
+        images, labels = images.to(device), labels.to(device)
+        print(images.shape)
+        print(labels.shape)
+        print(labels)
+        break
+
+
 def create_candlestick_chart(
     df: pl.DataFrame, code: str, file_name: str, write: bool = False
 ):
@@ -98,7 +123,7 @@ def create_candlestick_chart(
     fig.savefig(buf, format="png")
 
     # PNGデータをBLOB型に変換
-    image = buf.getvalue()
+    # image = buf.getvalue()
 
     buf.seek(0)
     image = buf.getvalue()
@@ -170,7 +195,7 @@ def img_reader(write: bool = False):
     cursor.execute("SELECT image, nextday_close FROM result LIMIT 1")
     image_data, label = cursor.fetchone()
 
-    img = Image.open(io.BytesIO(image_data))
+    img = Image.open(io.BytesIO(image_data)).convert("L")
 
     logger.info(f"img.format: {img.format}")  # PNG
     logger.info(f"img.size  : {img.size}")  # (300, 300)
@@ -178,8 +203,8 @@ def img_reader(write: bool = False):
     logger.info(f"label    : {label}")
 
     # Convert RGBA to RGB if the image has an alpha channel
-    if img.mode == "RGBA":
-        img = img.convert("RGB")
+    # if img.mode == "RGBA":
+    #     img = img.convert("RGB")
 
     # Save the image as PNG
     path = "./data/output.png"
@@ -197,6 +222,40 @@ def dataset_reader():
     print(f"item[1].shape: {dataset.__getitem__(0)[1]}")
 
 
+class PolarsDataset(Dataset):
+    def __init__(self, df: pl.DataFrame, image_transform=None):
+        """
+        Polars DataFrame を受け取り、画像とラベルのペアを返すデータセット。
+
+        Args:
+            df (polars.DataFrame): 画像パスとラベルを含む DataFrame。
+                "image" 列には画像へのパス、"label" 列にはラベルが含まれている必要があります。
+            image_transform (callable, optional): 画像に適用する変換。Defaults to None.
+        """
+        self.df = df
+        self.image_transform = image_transform
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        """
+        インデックスに対応する画像とラベルのペアを返す。
+
+        Args:
+            idx (int): インデックス。
+
+        Returns:
+            tuple: (image, label) のペア。
+        """
+        image_data = self.df["image"][idx]
+        label = self.df["result_1"][idx]
+        image = Image.open(io.BytesIO(image_data)).convert("L")
+        image = torchvision.transforms.ToTensor()(image)
+        label = torch.tensor(label, dtype=torch.long)
+        return image, label
+
+
 class SQLiteDataset(Dataset):
     def __init__(self, label):
         self.conn = database.open_db()
@@ -211,7 +270,8 @@ class SQLiteDataset(Dataset):
         image_data, label = self.cursor.fetchone()
         image = Image.open(io.BytesIO(image_data)).convert("L")
         image = torchvision.transforms.ToTensor()(image)
-        label = torch.tensor(label, dtype=torch.float)
+        label = torch.tensor(label, dtype=torch.long)
+        # label = torch.tensor(label, dtype=torch.float)
         return image, label
 
     def __len__(self):
@@ -220,82 +280,97 @@ class SQLiteDataset(Dataset):
 
 
 class CNNModel(nn.Module):
+    # 利用するレイヤーや初期設定したい内容の記述
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.conv5 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
-        self.bn5 = nn.BatchNorm2d(512)
         self.pool = nn.MaxPool2d(2, stride=2)
-        self.fc1 = nn.Linear(512 * 9 * 9, 128)  # 出力サイズ要確認
-        self.fc2 = nn.Linear(128, 1)  # 回帰タスクのため出力は1
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))  # 出力サイズを (1, 1) に指定
+        self.fc1 = nn.Linear(64, 32)  # 出力サイズ要確認
+        self.fc2 = nn.Linear(32, 3)
 
     def forward(self, x):
         x = self.pool(nn.functional.relu(self.conv1(x)))
-        # x = self.bn1(x)
+        x = self.bn1(x)
         x = self.pool(nn.functional.relu(self.conv2(x)))
-        x = nn.functional.dropout(x, p=0.5)
         x = self.bn2(x)
-        x = self.pool(nn.functional.relu(self.conv3(x)))
-        x = self.pool(nn.functional.relu(self.conv4(x)))
-        x = nn.functional.dropout(x, p=0.5)
-        x = self.pool(nn.functional.relu(self.conv5(x)))
-        x = self.bn5(x)
-        # 入力画像のサイズを取得
-        b, c, h, w = x.shape
-        # `view`関数の引数を動的に計算
-        x = x.view(-1, c * h * w)
+        x = self.avgpool(x)  # AdaptiveAvgPool2d を適用
+        x = torch.flatten(x, 1)  # 1次元に変換
         x = nn.functional.relu(self.fc1(x))
         x = self.fc2(x)
-        return x.view(-1, 1)  # 次元を削減
+
+        # # 入力画像のサイズを取得
+        # b, c, h, w = x.shape
+        # # `view`関数の引数を動的に計算
+        # x = x.view(-1, c * h * w)
+        # x = nn.functional.relu(self.fc1(x))
+        # x = self.fc2(x)
+        return x
 
 
-def analyzer(label: str):
+@app.command()
+def training(label: str):
     # 経過時間
     start = time.time()
 
-    batch_size = 128
-    max_epoch = 32
+    BATCH_SIZE = 128
+    MAX_EPOCH = 32
 
     print(f"label: {label}")
-    print(f"batch_size: {batch_size}")
-    print(f"max_epoch: {max_epoch}")
+    print(f"batch size: {BATCH_SIZE}")
+    print(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
-    dataset = SQLiteDataset(label)
+    conn = database.open_db()
+    lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
+
+    df_negarive_date = (
+        lf.group_by("date", maintain_order=True)
+        .mean()
+        .filter((pl.col("result_0") > 0.75))
+        .collect()
+        .sort("date")
+    )
+    logger.debug(df_negarive_date)
+    df = lf.collect().filter(pl.col("date").is_in(df_negarive_date["date"]))
+
+    dataset = PolarsDataset(df)
+
     n_samples = len(dataset)
     n_train = int(0.75 * n_samples)
     n_test = n_samples - n_train
     train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
 
     # ランダムサンプリング
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    # dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    # CUDAが使えない場合はエラーを出力して終了
+    if not torch.cuda.is_available():
+        logger.error("CUDA is not available")
+        return
 
-    # CUDAが使える場合は使う
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda")
 
     # モデルのインスタンス化
-    model = CNNModel()
     model = CNNModel().to(device)
 
     loss_fn = nn.CrossEntropyLoss()  # 分類なのでクロスエントロピー
     # loss_fn = nn.MSELoss()  # 回帰なので平均二乗誤差
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.0001)
 
-    for epoch in range(max_epoch):
+    logger.info("start training")
+    for epoch in range(MAX_EPOCH):
         for images, labels in train_dataloader:
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
             outputs = model(images)
-            loss = loss_fn(outputs, labels.float().view(-1, 1))
+            # loss = loss_fn(outputs, labels.float().view(-1, 1))
+            loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
 
@@ -307,11 +382,11 @@ def analyzer(label: str):
                 for images, labels in test_dataloader:
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
-                    test_loss = loss_fn(outputs, labels.float().view(-1, 1))
+                    test_loss = loss_fn(outputs, labels)
 
             logger.info(f"Epoch {epoch + 1}(Test), Loss: {test_loss.item():.4f}")
 
-    torch.save(model.state_dict(), "model.pth")
+    torch.save(model.state_dict(), "./model/model_1.pth")
 
     # 経過時間
     elapsed_time = time.time() - start

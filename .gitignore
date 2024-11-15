@@ -4,3 +4,4 @@ __pycache__/
 .venv
 app_settings.json
 data/
+model/

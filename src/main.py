@@ -24,10 +24,10 @@ def test():
     print(len(numbers))
 
 
-@app.command()
-def run(label: str):
-    # analyzer.dataset_reader()
-    analyzer.analyzer(label)
+# @app.command()
+# def run(label: str):
+#     # analyzer.dataset_reader()
+#     analyzer.analyzer(label)
 
 
 if __name__ == "__main__":
