@@ -12,14 +12,7 @@ import models
 app = Typer(no_args_is_help=True)
 
 
-@app.command()
-def test():
-    nikkei225 = load_nikkei225_csv()
-    for stock in nikkei225.get_column("code"):
-        print(stock)
-
-
-@app.command()
+@app.command("settings")
 def load_settings():
     with open(f"{constants.APP_SETTINGS_PATH}", "r") as f:
         items = models.AppSettings(**json.load(f))
@@ -27,7 +20,7 @@ def load_settings():
         return items
 
 
-@app.command("load-nikkei225")
+@app.command("nikkei225")
 def load_nikkei225_csv() -> pl.DataFrame:
     with open(f"{constants.NIKKEI225_PATH}") as f:
         df = pl.read_csv(f)
@@ -35,13 +28,7 @@ def load_nikkei225_csv() -> pl.DataFrame:
     return df
 
 
-# def load_nikkei225_csv():
-#     with open(f"{NIKKEI225_PATH}") as f:
-#         df = pd.read_csv(f)
-#     return df
-
-
-@app.command()
+@app.command("refresh_token")
 def fetch_refresh_token():
     app_settings = load_settings()
     body = {"mailaddress": app_settings.mailaddress, "password": app_settings.password}
@@ -65,7 +52,7 @@ def fetch_refresh_token():
     logger.info(f"Refresh token was saved to {constants.APP_SETTINGS_PATH}")
 
 
-@app.command()
+@app.command("id_token")
 def fetch_id_token():
     app_settings = load_settings()
     params = {"refreshtoken": app_settings.refresh_token}
@@ -114,17 +101,6 @@ def fetch_daily_quotes(code: str):
     logger.debug(f"len: {len(daily_quotes.daily_quotes)}")
 
     return pl.DataFrame(daily_quotes.model_dump()["daily_quotes"])
-
-
-# def fetch_daily_quotes_of_nikkei225_to_db():
-#     nikkei225 = load_nikkei225_csv()
-#     for code in nikkei225.get_column("code"):
-#         df = fetch_daily_quotes(code)
-#         if df is None:
-#             continue
-#         database.insert_ohlc(df)
-#         print(f"Inserted {code} to database.")
-#         sleep(1)
 
 
 @app.command()

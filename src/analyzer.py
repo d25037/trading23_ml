@@ -5,12 +5,12 @@ import time
 from sys import stderr
 
 import matplotlib.pyplot
-import mplfinance as mpf
+import mplfinance as mpf  # type: ignore
 import pandas as pd
 import polars as pl
 import torch
 import torch.utils.data
-import torchvision
+import torchvision  # type: ignore
 from loguru import logger
 from PIL import Image
 from torch import nn
@@ -32,60 +32,6 @@ def is_cudable() -> None:
         print(f"Device Name: {torch.cuda.get_device_name()}")
     else:
         print("ERROR: CUDA is unavailable")
-
-
-@app.command()
-def test(code: str):
-    stock = fetcher.fetch_daily_quotes(code)
-    if stock is None:
-        return
-
-    j = 920
-
-    date = stock[j - 1]["date"].item()
-    close = stock[j - 1]["close"].item()
-
-    nextday = stock[j]
-    nextday_open = nextday["open"].item()
-    nextday_close = nextday["close"].item()
-    result_open = round(100 * (nextday_open - close) / close, 2)
-    result_close = round(100 * (nextday_close - close) / close, 2)
-
-    print(nextday)
-    print(f"date: {date}")
-    print(f"close: {close}")
-    print(f"result_open: {result_open}")
-    print(f"result_close: {result_close}")
-
-    stock_sliced = stock.slice(j - 10, 10)
-    df = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
-    print(df)
-    create_candlestick_chart(df, code, "test", write=True)
-
-
-@app.command()
-def test2(label: str):
-    batch_size = 128
-
-    dataset = SQLiteDataset(label)
-    n_samples = len(dataset)
-    n_train = int(0.75 * n_samples)
-    n_test = n_samples - n_train
-    train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
-
-    # ランダムサンプリング
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    # CUDAが使える場合は使う
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    for images, labels in train_dataloader:
-        images, labels = images.to(device), labels.to(device)
-        print(images.shape)
-        print(labels.shape)
-        print(labels)
-        break
 
 
 def create_candlestick_chart(
@@ -195,7 +141,7 @@ def img_reader(write: bool = False):
     cursor.execute("SELECT image, nextday_close FROM result LIMIT 1")
     image_data, label = cursor.fetchone()
 
-    img = Image.open(io.BytesIO(image_data)).convert("L")
+    img = Image.open(io.BytesIO(image_data)).convert("RGB")
 
     logger.info(f"img.format: {img.format}")  # PNG
     logger.info(f"img.size  : {img.size}")  # (300, 300)
@@ -207,9 +153,11 @@ def img_reader(write: bool = False):
     #     img = img.convert("RGB")
 
     # Save the image as PNG
-    path = "./data/output.png"
-    img.save(f"{path}", "PNG")
-    logger.info(f"Image has been saved as PNG to {path}")
+    if write:
+        path = "./data/output.png"
+        img.save(f"{path}", "PNG")
+        logger.info(f"Image has been saved as PNG to {path}")
+
     return
 
 
@@ -312,7 +260,7 @@ class CNNModel(nn.Module):
 
 
 @app.command()
-def training(label: str):
+def training(label: str, outlook: models.Outlook):
     # 経過時間
     start = time.time()
 
@@ -324,18 +272,7 @@ def training(label: str):
     print(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
-    conn = database.open_db()
-    lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
-
-    df_negarive_date = (
-        lf.group_by("date", maintain_order=True)
-        .mean()
-        .filter((pl.col("result_0") > 0.75))
-        .collect()
-        .sort("date")
-    )
-    logger.debug(df_negarive_date)
-    df = lf.collect().filter(pl.col("date").is_in(df_negarive_date["date"]))
+    df = database.select_result_by_outlook(outlook)
 
     dataset = PolarsDataset(df)
 
@@ -374,22 +311,83 @@ def training(label: str):
             loss.backward()
             optimizer.step()
 
-        logger.info(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
+        logger.info(f"Epoch {epoch + 1}, Loss: {round(loss.item(), 3)}")
 
         # テストデータでの評価
-        if epoch % 3 == 0:
+        if epoch % 5 == 0:
+            label_0 = [0, 0, 0]
+            label_1 = [0, 0, 0]
+            label_2 = [0, 0, 0]
             with torch.no_grad():
                 for images, labels in test_dataloader:
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
                     test_loss = loss_fn(outputs, labels)
+                    predicted = int(torch.argmax(outputs, dim=1).item())
+                    # probability = round(torch.max(outputs, dim=1).values.item(), 2)
+                    if labels == 0:
+                        label_0[predicted] += 1
+                    elif labels == 1:
+                        label_1[predicted] += 1
+                    else:
+                        label_2[predicted] += 1
+                    # logger.info(
+                    #     f"predicted: {predicted}[確率: {probability}], labels: {labels}"
+                    # )
 
-            logger.info(f"Epoch {epoch + 1}(Test), Loss: {test_loss.item():.4f}")
+            # label_0 などをDataFrameに変換
+            df = pl.DataFrame(
+                {"label_0": label_0, "label_1": label_1, "label_2": label_2}
+            )
+            logger.info(df)
+            logger.info(f"Epoch {epoch + 1}(Test), Loss: {round(test_loss.item(), 3)}")
 
-    torch.save(model.state_dict(), "./model/model_1.pth")
+    # モデルの保存
+    file_name = f"./model/{outlook}_{round(test_loss.item), 3}.pth"
+    torch.save(model.state_dict(), file_name)
 
     # 経過時間
     elapsed_time = time.time() - start
-    logger.info(f"elapsed_time: {elapsed_time:.2f}")
+    logger.info(f"elapsed_time: {round(elapsed_time, 2)}")
 
     return
+
+
+@app.command()
+def predict(model_name: str):
+    logger.remove()
+    logger.add(stderr, level="INFO")
+
+    nikkei225 = fetcher.load_nikkei225_csv()
+
+    model = CNNModel()
+    model.load_state_dict(torch.load(f"./model/{model_name}.pth"))
+
+    i = 1
+    for code in nikkei225.get_column("code"):
+        df = fetcher.fetch_daily_quotes(code)
+        if df is None:
+            continue
+
+        stock_sliced = df.tail(10)
+        df_sampled = stock_sliced.with_columns(
+            pl.col("date").str.to_date().alias("date")
+        )
+        img = create_candlestick_chart(df_sampled, code, "predict")
+
+        image = Image.open(io.BytesIO(img)).convert("L")
+        image = torchvision.transforms.ToTensor()(image)
+
+        model.eval()
+        with torch.no_grad():
+            output = model(image)
+            predicted = torch.argmax(output, dim=1)
+            probability = torch.max(output, dim=1)
+
+        logger.info(
+            f"{code}: {predicted.item()} [確率: {round(probability.values.item(),2)}]"
+        )
+
+        if i % 10 == 0:
+            logger.info(f"{i}/225 has been processed.")
+        i += 1

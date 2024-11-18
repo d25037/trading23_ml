@@ -103,6 +103,34 @@ def insert_result(conn: sqlite3.Connection, result: models.Result):
     return
 
 
+@app.command("select-result")
+def select_result_by_outlook(outlook: models.Outlook):
+    logger.info(f"outlook: {outlook}")
+    conn = open_db()
+    lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
+
+    expr = {
+        models.Outlook.BULLISH: pl.col("result_0") >= 0.75,
+        models.Outlook.BEARISH: pl.col("result_0") <= 0.25,
+    }.get(outlook, (pl.col("result_0") < 0.75) & (pl.col("result_0") > 0.25))
+
+    df_date = (
+        lf.group_by("date", maintain_order=True)
+        .mean()
+        .filter(expr)
+        .collect()
+        .sort("date")
+    )
+
+    df = lf.collect().filter(pl.col("date").is_in(df_date["date"]))
+    logger.debug(df)
+
+    # df["result_1"]のカウント
+    logger.debug(df.group_by("result_1").agg(count=pl.col("result_1").count()))
+
+    return df
+
+
 @app.command()
 def test():
     conn = open_db()
@@ -133,12 +161,6 @@ def test():
     # len()
     df_4 = lf.group_by("date", maintain_order=True).count().collect().sort("date")
     logger.debug(df_4)
-
-    # cur = conn.cursor()
-    # for date in df_4["date"]:
-    #     cur.execute(f"DELETE FROM result WHERE date='{date}'")
-    # conn.commit()
-    # cur.close()
 
     df_5 = lf.collect().filter(pl.col("date").is_in(df_2["date"])).sort("date")
     logger.debug(df_5)

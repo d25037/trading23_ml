@@ -1,3 +1,5 @@
+from enum import Enum
+
 from pydantic import BaseModel, Field
 
 
@@ -48,3 +50,9 @@ class Result(BaseModel):
     nextday_open: float
     nextday_close: float
     image: bytes
+
+
+class Outlook(Enum):
+    BULLISH = "Bullish"
+    BEARISH = "Bearish"
+    NEUTRAL = "Neutral"
