@@ -20,6 +20,7 @@ from typer import Typer
 import database
 import fetcher
 import models
+import sandbox
 
 app = Typer(no_args_is_help=True)
 
@@ -198,7 +199,7 @@ class PolarsDataset(Dataset):
         """
         image_data = self.df["image"][idx]
         label = self.df["result_1"][idx]
-        image = Image.open(io.BytesIO(image_data)).convert("L")
+        image = Image.open(io.BytesIO(image_data)).convert("RGB")
         image = torchvision.transforms.ToTensor()(image)
         label = torch.tensor(label, dtype=torch.long)
         return image, label
@@ -216,7 +217,7 @@ class SQLiteDataset(Dataset):
             (index,),
         )
         image_data, label = self.cursor.fetchone()
-        image = Image.open(io.BytesIO(image_data)).convert("L")
+        image = Image.open(io.BytesIO(image_data)).convert("RGB")
         image = torchvision.transforms.ToTensor()(image)
         label = torch.tensor(label, dtype=torch.long)
         # label = torch.tensor(label, dtype=torch.float)
@@ -231,7 +232,7 @@ class CNNModel(nn.Module):
     # 利用するレイヤーや初期設定したい内容の記述
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
@@ -265,14 +266,15 @@ def training(label: str, outlook: models.Outlook):
     start = time.time()
 
     BATCH_SIZE = 128
-    MAX_EPOCH = 32
+    MAX_EPOCH = 50
 
     print(f"label: {label}")
     print(f"batch size: {BATCH_SIZE}")
     print(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
-    df = database.select_result_by_outlook(outlook)
+    # df = database.select_result_by_outlook(outlook)
+    df = sandbox.db()
 
     dataset = PolarsDataset(df)
 
@@ -315,35 +317,26 @@ def training(label: str, outlook: models.Outlook):
 
         # テストデータでの評価
         if epoch % 5 == 0:
-            label_0 = [0, 0, 0]
-            label_1 = [0, 0, 0]
-            label_2 = [0, 0, 0]
             with torch.no_grad():
                 for images, labels in test_dataloader:
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
                     test_loss = loss_fn(outputs, labels)
-                    predicted = int(torch.argmax(outputs, dim=1).item())
                     # probability = round(torch.max(outputs, dim=1).values.item(), 2)
-                    if labels == 0:
-                        label_0[predicted] += 1
-                    elif labels == 1:
-                        label_1[predicted] += 1
-                    else:
-                        label_2[predicted] += 1
                     # logger.info(
                     #     f"predicted: {predicted}[確率: {probability}], labels: {labels}"
                     # )
+            predicted_tensor = torch.argmax(outputs, dim=1)
 
-            # label_0 などをDataFrameに変換
-            df = pl.DataFrame(
-                {"label_0": label_0, "label_1": label_1, "label_2": label_2}
-            )
-            logger.info(df)
+            predicted_list = [0, 0, 0, 0]
+            for predicted in predicted_tensor.tolist():
+                predicted_list[predicted] += 1
+
             logger.info(f"Epoch {epoch + 1}(Test), Loss: {round(test_loss.item(), 3)}")
+            logger.info(f"predicted: {predicted_list}")
 
     # モデルの保存
-    file_name = f"./model/{outlook}_{round(test_loss.item), 3}.pth"
+    file_name = f"./model/{outlook.value}_{round(test_loss.item(), 3)}.pth"
     torch.save(model.state_dict(), file_name)
 
     # 経過時間
@@ -354,14 +347,20 @@ def training(label: str, outlook: models.Outlook):
 
 
 @app.command()
-def predict(model_name: str):
+def predict():
     logger.remove()
     logger.add(stderr, level="INFO")
 
     nikkei225 = fetcher.load_nikkei225_csv()
 
-    model = CNNModel()
-    model.load_state_dict(torch.load(f"./model/{model_name}.pth"))
+    model_bearish = CNNModel()
+    model_bearish.load_state_dict(torch.load("./model/Bearish_0.813.pth"))
+
+    model_neutral = CNNModel()
+    model_neutral.load_state_dict(torch.load("./model/Neutral_0.864.pth"))
+
+    model_bullish = CNNModel()
+    model_bullish.load_state_dict(torch.load("./model/Bullish_0.767.pth"))
 
     i = 1
     for code in nikkei225.get_column("code"):
@@ -375,18 +374,33 @@ def predict(model_name: str):
         )
         img = create_candlestick_chart(df_sampled, code, "predict")
 
-        image = Image.open(io.BytesIO(img)).convert("L")
+        image = Image.open(io.BytesIO(img)).convert("RGB")
         image = torchvision.transforms.ToTensor()(image)
+        image = image.unsqueeze(0)
 
-        model.eval()
+        model_bullish.eval()
         with torch.no_grad():
-            output = model(image)
+            output = model_bullish(image)
             predicted = torch.argmax(output, dim=1)
             probability = torch.max(output, dim=1)
 
-        logger.info(
-            f"{code}: {predicted.item()} [確率: {round(probability.values.item(),2)}]"
-        )
+            logger.info(f"{code} Bullish: {predicted} [確率: {probability.values}]")
+
+        model_neutral.eval()
+        with torch.no_grad():
+            output = model_neutral(image)
+            predicted = torch.argmax(output, dim=1)
+            probability = torch.max(output, dim=1)
+
+            logger.info(f"{code} Neutral: {predicted} [確率: {probability.values}]")
+
+        model_bearish.eval()
+        with torch.no_grad():
+            output = model_bearish(image)
+            predicted = torch.argmax(output, dim=1)
+            probability = torch.max(output, dim=1)
+
+            logger.info(f"{code} Bearish: {predicted} [確率: {probability.values}]")
 
         if i % 10 == 0:
             logger.info(f"{i}/225 has been processed.")

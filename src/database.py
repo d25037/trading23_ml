@@ -126,43 +126,8 @@ def select_result_by_outlook(outlook: models.Outlook):
     logger.debug(df)
 
     # df["result_1"]のカウント
-    logger.debug(df.group_by("result_1").agg(count=pl.col("result_1").count()))
+    logger.debug(
+        df.group_by("result_1").agg(count=pl.col("result_1").count()).sort("result_1")
+    )
 
     return df
-
-
-@app.command()
-def test():
-    conn = open_db()
-    lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
-    logger.debug(f"len: {len(lf.collect())}")
-
-    df_1 = lf.group_by("date", maintain_order=True).mean().collect().sort("date")
-    print(df_1)
-
-    df_2 = (
-        lf.group_by("date", maintain_order=True)
-        .mean()
-        .filter(pl.col("result_0") < 0.25)
-        .collect()
-        .sort("date")
-    )
-    logger.debug(df_2)
-
-    df_3 = (
-        lf.group_by("date", maintain_order=True)
-        .mean()
-        .filter(pl.col("result_0") > 0.75)
-        .collect()
-        .sort("date")
-    )
-    logger.debug(df_3)
-
-    # len()
-    df_4 = lf.group_by("date", maintain_order=True).count().collect().sort("date")
-    logger.debug(df_4)
-
-    df_5 = lf.collect().filter(pl.col("date").is_in(df_2["date"])).sort("date")
-    logger.debug(df_5)
-
-    return

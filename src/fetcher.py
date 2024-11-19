@@ -28,7 +28,7 @@ def load_nikkei225_csv() -> pl.DataFrame:
     return df
 
 
-@app.command("refresh_token")
+@app.command("refresh-token")
 def fetch_refresh_token():
     app_settings = load_settings()
     body = {"mailaddress": app_settings.mailaddress, "password": app_settings.password}
@@ -52,7 +52,7 @@ def fetch_refresh_token():
     logger.info(f"Refresh token was saved to {constants.APP_SETTINGS_PATH}")
 
 
-@app.command("id_token")
+@app.command("id-token")
 def fetch_id_token():
     app_settings = load_settings()
     params = {"refreshtoken": app_settings.refresh_token}
