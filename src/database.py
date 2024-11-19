@@ -104,7 +104,7 @@ def insert_result(conn: sqlite3.Connection, result: models.Result):
 
 
 @app.command("select-result")
-def select_result_by_outlook(outlook: models.Outlook):
+def select_result_by_outlook(outlook: models.Outlook, quartile: bool = False):
     logger.info(f"outlook: {outlook}")
     conn = open_db()
     lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
@@ -125,9 +125,49 @@ def select_result_by_outlook(outlook: models.Outlook):
     df = lf.collect().filter(pl.col("date").is_in(df_date["date"]))
     logger.debug(df)
 
-    # df["result_1"]のカウント
-    logger.debug(
-        df.group_by("result_1").agg(count=pl.col("result_1").count()).sort("result_1")
+    if not quartile:
+        # df["result_1"]のカウント
+        logger.debug(
+            df.group_by("result_1")
+            .agg(count=pl.col("result_1").count())
+            .sort("result_1")
+        )
+        return df
+
+    df_describe = df.describe()
+    threshold_25 = float(
+        df_describe.filter(pl.col("statistic") == "25%")["nextday_close"].item()
+    )
+    threshold_50 = float(
+        df_describe.filter(pl.col("statistic") == "50%")["nextday_close"].item()
+    )
+    threshold_75 = float(
+        df_describe.filter(pl.col("statistic") == "75%")["nextday_close"].item()
     )
 
-    return df
+    def categorize_by_nextday_close(value):
+        if value < threshold_25:
+            return 0
+        elif value < threshold_50:
+            return 1
+        elif value < threshold_75:
+            return 2
+        else:
+            return 3
+
+    # result_quartile カラムを作成
+    df_new = df.with_columns(
+        pl.col("nextday_close")
+        .map_elements(
+            lambda value: categorize_by_nextday_close(value), return_dtype=pl.Int64
+        )
+        .alias("result_quartile")
+    )
+
+    logger.debug(
+        df_new.group_by("result_new")
+        .agg(count=pl.col("result_new").count())
+        .sort("result_new")
+    )
+
+    return df_new
