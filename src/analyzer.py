@@ -8,13 +8,16 @@ import matplotlib.pyplot
 import mplfinance as mpf  # type: ignore
 import pandas as pd
 import polars as pl
+import timm
 import torch
 import torch.utils.data
 import torchvision  # type: ignore
+import torchvision.transforms as transforms
 from loguru import logger
 from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, random_split
+from tqdm import tqdm
 from typer import Typer
 
 import database
@@ -200,7 +203,10 @@ class PolarsDataset(Dataset):
         image_data = self.df["image"][idx]
         label = self.df["result_1"][idx]
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
-        image = torchvision.transforms.ToTensor()(image)
+        if self.image_transform:
+            image = self.image_transform(image)
+        else:
+            image = torchvision.transforms.ToTensor()(image)
         label = torch.tensor(label, dtype=torch.long)
         return image, label
 
@@ -239,7 +245,7 @@ class CNNModel(nn.Module):
         self.pool = nn.MaxPool2d(2, stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))  # 出力サイズを (1, 1) に指定
         self.fc1 = nn.Linear(64, 32)  # 出力サイズ要確認
-        self.fc2 = nn.Linear(32, 3)
+        self.fc2 = nn.Linear(32, 4)
 
     def forward(self, x):
         x = self.pool(nn.functional.relu(self.conv1(x)))
@@ -265,18 +271,28 @@ def training(label: str, outlook: models.Outlook):
     # 経過時間
     start = time.time()
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = 16
     MAX_EPOCH = 50
+    SHORT_PROGRESS_BAR = "{l_bar}{bar:10}{r_bar}{bar:-10b}"
 
     print(f"label: {label}")
     print(f"batch size: {BATCH_SIZE}")
     print(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
-    # df = database.select_result_by_outlook(outlook)
-    df = sandbox.db()
+    df = database.select_result_by_outlook(outlook, quartile=True)
+    # df = sandbox.db()
 
-    dataset = PolarsDataset(df)
+    # データの前処理
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+
+    dataset = PolarsDataset(df, image_transform=transform)
 
     n_samples = len(dataset)
     n_train = int(0.75 * n_samples)
@@ -286,6 +302,7 @@ def training(label: str, outlook: models.Outlook):
     # ランダムサンプリング
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    logger.info(f"train: {len(train_dataset)}, test: {len(test_dataset)}")
 
     # CUDAが使えない場合はエラーを出力して終了
     if not torch.cuda.is_available():
@@ -294,43 +311,60 @@ def training(label: str, outlook: models.Outlook):
 
     device = torch.device("cuda")
 
-    # モデルのインスタンス化
-    model = CNNModel().to(device)
+    # # モデルのインスタンス化
+    # model = CNNModel().to(device)
 
-    loss_fn = nn.CrossEntropyLoss()  # 分類なのでクロスエントロピー
-    # loss_fn = nn.MSELoss()  # 回帰なので平均二乗誤差
+    # 事前学習済みのResNet18をロード
+    # model = torchvision.models.resnet152(pretrained=True)
+    model = timm.create_model("vit_small_patch16_224", pretrained=True, num_classes=4)
+
+    # 入力画像のサイズに合わせて最初の畳み込み層を修正
+    # model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+    # ラベル数に合わせて最後の全結合層を修正
+    # num_ftrs = model.fc.in_features
+    # model.fc = nn.Linear(num_ftrs, 4)
+    model = model.to(device)
+
+    criterion = nn.CrossEntropyLoss()  # 分類なのでクロスエントロピー
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.0001)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     logger.info("start training")
     for epoch in range(MAX_EPOCH):
-        for images, labels in train_dataloader:
+        for images, labels in tqdm(train_dataloader, bar_format=SHORT_PROGRESS_BAR):
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
             outputs = model(images)
-            # loss = loss_fn(outputs, labels.float().view(-1, 1))
-            loss = loss_fn(outputs, labels)
+            # loss = criterion(outputs, labels.float().view(-1, 1))
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
 
         logger.info(f"Epoch {epoch + 1}, Loss: {round(loss.item(), 3)}")
 
         # テストデータでの評価
+        predicted_list = [0, 0, 0, 0]
+
         if epoch % 5 == 0:
             with torch.no_grad():
                 for images, labels in test_dataloader:
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
-                    test_loss = loss_fn(outputs, labels)
+                    test_loss = criterion(outputs, labels)
                     # probability = round(torch.max(outputs, dim=1).values.item(), 2)
                     # logger.info(
                     #     f"predicted: {predicted}[確率: {probability}], labels: {labels}"
                     # )
-            predicted_tensor = torch.argmax(outputs, dim=1)
+                    predicted_tensor = torch.argmax(outputs, dim=1)
 
-            predicted_list = [0, 0, 0, 0]
-            for predicted in predicted_tensor.tolist():
-                predicted_list[predicted] += 1
+                    for predicted in predicted_tensor.tolist():
+                        predicted_list[predicted] += 1
+            # logger.info(f"outputs: {outputs}")
+            # logger.info(f"outputs.shape: {outputs.shape}")
+            # logger.info(f"labels: {labels}")
+            # logger.info(f"labels.shape: {labels.shape}")
 
             logger.info(f"Epoch {epoch + 1}(Test), Loss: {round(test_loss.item(), 3)}")
             logger.info(f"predicted: {predicted_list}")

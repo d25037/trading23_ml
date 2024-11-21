@@ -19,7 +19,11 @@ def tensor():
 
     print(tensor)
     print("---")
+    print(tensor.shape)
+    print("---")
     print(predict)
+    print("---")
+    print(predict.shape)
     print("---")
     print(probability_b.values)
     print("---")
@@ -160,10 +164,3 @@ def db():
     )
 
     return df_bearish_new
-
-
-@app.command()
-def num():
-    number = 0.1234
-    print(f"{number:.2f}")
-    print(f"{round(number, 2)}")

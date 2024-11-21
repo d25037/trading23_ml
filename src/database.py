@@ -109,20 +109,24 @@ def select_result_by_outlook(outlook: models.Outlook, quartile: bool = False):
     conn = open_db()
     lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
 
-    expr = {
-        models.Outlook.BULLISH: pl.col("result_0") >= 0.75,
-        models.Outlook.BEARISH: pl.col("result_0") <= 0.25,
-    }.get(outlook, (pl.col("result_0") < 0.75) & (pl.col("result_0") > 0.25))
+    if outlook != models.Outlook.ALL:
+        expr = {
+            models.Outlook.BULLISH: pl.col("result_0") >= 0.75,
+            models.Outlook.BEARISH: pl.col("result_0") <= 0.25,
+        }.get(outlook, (pl.col("result_0") < 0.75) & (pl.col("result_0") > 0.25))
 
-    df_date = (
-        lf.group_by("date", maintain_order=True)
-        .mean()
-        .filter(expr)
-        .collect()
-        .sort("date")
-    )
+        df_date = (
+            lf.group_by("date", maintain_order=True)
+            .mean()
+            .filter(expr)
+            .collect()
+            .sort("date")
+        )
 
-    df = lf.collect().filter(pl.col("date").is_in(df_date["date"]))
+        df = lf.collect().filter(pl.col("date").is_in(df_date["date"]))
+    else:
+        df = lf.collect().sort("date")
+
     logger.debug(df)
 
     if not quartile:
@@ -165,9 +169,9 @@ def select_result_by_outlook(outlook: models.Outlook, quartile: bool = False):
     )
 
     logger.debug(
-        df_new.group_by("result_new")
-        .agg(count=pl.col("result_new").count())
-        .sort("result_new")
+        df_new.group_by("result_quartile")
+        .agg(count=pl.col("result_quartile").count())
+        .sort("result_quartile")
     )
 
     return df_new

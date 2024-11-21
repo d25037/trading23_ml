@@ -56,3 +56,4 @@ class Outlook(Enum):
     BULLISH = "Bullish"
     BEARISH = "Bearish"
     NEUTRAL = "Neutral"
+    ALL = "All"
