@@ -1,5 +1,6 @@
 import datetime
 import json
+from sys import stderr
 
 import polars as pl
 import requests
@@ -8,6 +9,7 @@ from typer import Typer
 
 import constants
 import models
+from database import insert_ohlc
 
 app = Typer(no_args_is_help=True)
 
@@ -77,8 +79,8 @@ def fetch_id_token():
     logger.info(f"ID token was saved to {constants.APP_SETTINGS_PATH}")
 
 
-@app.command()
-def fetch_daily_quotes(code: str):
+@app.command("daily-quotes")
+def fetch_daily_quotes(code: str, insert_db: bool = False):
     app_settings = load_settings()
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
     params = {"code": code}
@@ -100,10 +102,27 @@ def fetch_daily_quotes(code: str):
     logger.debug(daily_quotes.daily_quotes)
     logger.debug(f"len: {len(daily_quotes.daily_quotes)}")
 
-    return pl.DataFrame(daily_quotes.model_dump()["daily_quotes"])
+    df = pl.DataFrame(daily_quotes.model_dump()["daily_quotes"])
+
+    if insert_db:
+        insert_ohlc(df)
+
+    return df
 
 
-@app.command()
+@app.command("nikkei225")
+def fetch_nikkei225():
+    logger.remove()
+    logger.add(stderr, level="INFO")
+
+    nikkei225 = load_nikkei225_csv()
+    for i, code in enumerate(nikkei225.get_column("code")):
+        fetch_daily_quotes(code, insert_db=True)
+        if (i + 1) % 10 == 0:
+            logger.info(f"{i+1}/225 has been processed.")
+
+
+@app.command("training-calendar")
 def fetch_trading_calender():
     app_settings = load_settings()
     today = datetime.date.today()

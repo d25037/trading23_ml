@@ -1,7 +1,8 @@
 import polars as pl
 import torch
 from loguru import logger
-from torch.utils.data import DataLoader, Dataset, random_split
+from sklearn.metrics import confusion_matrix
+from torch.utils.data import DataLoader, random_split
 from typer import Typer
 
 import analyzer
@@ -13,22 +14,43 @@ app = Typer()
 
 @app.command()
 def tensor():
-    tensor = torch.randn(3, 3)
+    tensor = torch.randn(100, 4)
     predict = torch.argmax(tensor, dim=1)
-    probability_b = torch.max(tensor, dim=1)
+    label = torch.randint(0, 4, (100,))
 
     print(tensor)
     print("---")
     print(tensor.shape)
     print("---")
+    print("predict")
     print(predict)
     print("---")
     print(predict.shape)
     print("---")
-    print(probability_b.values)
+    print("label")
+    print(label)
     print("---")
-    for x, y in zip(predict.tolist(), probability_b.values.tolist()):
-        print(x, y)
+    print(label.shape)
+    print(torch.sum(predict == label).item())
+
+    # Confusion matrixの生成
+    cm = confusion_matrix(
+        y_true=label,
+        y_pred=predict,
+    )
+    print(cm)
+
+    # # Confusion matrixの表示
+    # disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    # disp.plot(cmap=plt.cm.Blues)
+
+    # # X軸ラベル、Y軸ラベル、タイトルの追加
+    # plt.xlabel("Predicted")
+    # plt.ylabel("Actual")
+    # plt.title("Confusion Matrix")
+
+    # # Confusion matrixの表示
+    # plt.show()
 
     return
 
@@ -59,7 +81,7 @@ def candle_stick(code: str):
     stock_sliced = stock.slice(j - 10, 10)
     df = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
     print(df)
-    analyzer.create_candlestick_chart(df, code, "test", write=True)
+    analyzer.create_candlestick_chart_from_df(df, code, "test", write=True)
 
 
 @app.command()

@@ -15,6 +15,7 @@ import torchvision  # type: ignore
 import torchvision.transforms as transforms
 from loguru import logger
 from PIL import Image
+from sklearn.metrics import confusion_matrix
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, random_split
 from tqdm import tqdm
@@ -23,7 +24,6 @@ from typer import Typer
 import database
 import fetcher
 import models
-import sandbox
 
 app = Typer(no_args_is_help=True)
 
@@ -38,8 +38,33 @@ def is_cudable() -> None:
         print("ERROR: CUDA is unavailable")
 
 
-def create_candlestick_chart(
-    df: pl.DataFrame, code: str, file_name: str, write: bool = False
+@app.command()
+def slice_df_for_candlestick():
+    conn = database.open_db()
+    df = database.select_ohlc_by_code(conn, "7203")
+    number = 1223
+
+    file_name = df[number - 1]["date"].item()
+    close = df[number - 1]["close"].item()
+
+    nextday = df[number]
+    nextday_open = nextday["open"].item()
+    nextday_close = nextday["close"].item()
+    result_open = round(100 * (nextday_open - close) / close, 2)
+    result_close = round(100 * (nextday_close - close) / close, 2)
+
+    stock_sliced = df.slice(number - 35, 35)
+    df_sampled = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
+    img = create_candlestick_chart_from_df(df_sampled, "7203", file_name, write=True)
+    return
+
+
+def create_candlestick_chart_from_df(
+    df: pl.DataFrame,
+    code: str,
+    file_name: str,
+    volume: bool = False,
+    write: bool = False,
 ):
     # DataFrameをmplfinanceの形式に変換
     df_pd: pd.DataFrame = df.to_pandas()
@@ -51,10 +76,11 @@ def create_candlestick_chart(
     fig, ax_list = mpf.plot(
         ohlc_data,
         type="candle",
-        volume=True,
+        volume=volume,
         style="yahoo",
         figsize=(3, 3),
         returnfig=True,
+        mav=(5, 25),
     )
 
     # 横軸と縦軸の目盛りを非表示にする
@@ -93,8 +119,7 @@ def create_data_set():
     nikkei225 = fetcher.load_nikkei225_csv()
     numbers = random.sample(range(20, 1100), 100)
 
-    i = 1
-    for code in nikkei225.get_column("code"):
+    for i, code in enumerate(nikkei225.get_column("code")):
         df = fetcher.fetch_daily_quotes(code)
         if df is None:
             continue
@@ -116,7 +141,7 @@ def create_data_set():
             df_sampled = stock_sliced.with_columns(
                 pl.col("date").str.to_date().alias("date")
             )
-            img = create_candlestick_chart(df_sampled, code, file_name)
+            img = create_candlestick_chart_from_df(df_sampled, code, file_name)
 
             result = models.Result(
                 **{
@@ -130,9 +155,8 @@ def create_data_set():
 
             database.insert_result(conn, result)
 
-        if i % 10 == 0:
-            logger.info(f"{i}/225 has been processed.")
-        i += 1
+        if (i + 1) % 10 == 0:
+            logger.info(f"{i+1}/225 has been processed.")
 
     return
 
@@ -151,10 +175,6 @@ def img_reader(write: bool = False):
     logger.info(f"img.size  : {img.size}")  # (300, 300)
     logger.info(f"img.mode  : {img.mode}")  # RGBA
     logger.info(f"label    : {label}")
-
-    # Convert RGBA to RGB if the image has an alpha channel
-    # if img.mode == "RGBA":
-    #     img = img.convert("RGB")
 
     # Save the image as PNG
     if write:
@@ -175,39 +195,32 @@ def dataset_reader():
 
 
 class PolarsDataset(Dataset):
-    def __init__(self, df: pl.DataFrame, image_transform=None):
-        """
-        Polars DataFrame を受け取り、画像とラベルのペアを返すデータセット。
-
-        Args:
-            df (polars.DataFrame): 画像パスとラベルを含む DataFrame。
-                "image" 列には画像へのパス、"label" 列にはラベルが含まれている必要があります。
-            image_transform (callable, optional): 画像に適用する変換。Defaults to None.
-        """
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        label: str,
+        image_transform: transforms.Compose | None = None,
+    ):
         self.df = df
+        self.label = label
         self.image_transform = image_transform
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
-        """
-        インデックスに対応する画像とラベルのペアを返す。
-
-        Args:
-            idx (int): インデックス。
-
-        Returns:
-            tuple: (image, label) のペア。
-        """
+        # image
         image_data = self.df["image"][idx]
-        label = self.df["result_1"][idx]
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
         if self.image_transform:
             image = self.image_transform(image)
         else:
-            image = torchvision.transforms.ToTensor()(image)
+            image = transforms.ToTensor()(image)
+
+        # label
+        label = self.df[self.label][idx]
         label = torch.tensor(label, dtype=torch.long)
+
         return image, label
 
 
@@ -226,7 +239,6 @@ class SQLiteDataset(Dataset):
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
         image = torchvision.transforms.ToTensor()(image)
         label = torch.tensor(label, dtype=torch.long)
-        # label = torch.tensor(label, dtype=torch.float)
         return image, label
 
     def __len__(self):
@@ -234,36 +246,36 @@ class SQLiteDataset(Dataset):
         return self.cursor.fetchone()[0]
 
 
-class CNNModel(nn.Module):
-    # 利用するレイヤーや初期設定したい内容の記述
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(32)
-        self.bn2 = nn.BatchNorm2d(64)
-        self.pool = nn.MaxPool2d(2, stride=2)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))  # 出力サイズを (1, 1) に指定
-        self.fc1 = nn.Linear(64, 32)  # 出力サイズ要確認
-        self.fc2 = nn.Linear(32, 4)
+# class CNNModel(nn.Module):
+#     # 利用するレイヤーや初期設定したい内容の記述
+#     def __init__(self):
+#         super().__init__()
+#         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+#         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+#         self.bn1 = nn.BatchNorm2d(32)
+#         self.bn2 = nn.BatchNorm2d(64)
+#         self.pool = nn.MaxPool2d(2, stride=2)
+#         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))  # 出力サイズを (1, 1) に指定
+#         self.fc1 = nn.Linear(64, 32)  # 出力サイズ要確認
+#         self.fc2 = nn.Linear(32, 4)
 
-    def forward(self, x):
-        x = self.pool(nn.functional.relu(self.conv1(x)))
-        x = self.bn1(x)
-        x = self.pool(nn.functional.relu(self.conv2(x)))
-        x = self.bn2(x)
-        x = self.avgpool(x)  # AdaptiveAvgPool2d を適用
-        x = torch.flatten(x, 1)  # 1次元に変換
-        x = nn.functional.relu(self.fc1(x))
-        x = self.fc2(x)
+#     def forward(self, x):
+#         x = self.pool(nn.functional.relu(self.conv1(x)))
+#         x = self.bn1(x)
+#         x = self.pool(nn.functional.relu(self.conv2(x)))
+#         x = self.bn2(x)
+#         x = self.avgpool(x)  # AdaptiveAvgPool2d を適用
+#         x = torch.flatten(x, 1)  # 1次元に変換
+#         x = nn.functional.relu(self.fc1(x))
+#         x = self.fc2(x)
 
-        # # 入力画像のサイズを取得
-        # b, c, h, w = x.shape
-        # # `view`関数の引数を動的に計算
-        # x = x.view(-1, c * h * w)
-        # x = nn.functional.relu(self.fc1(x))
-        # x = self.fc2(x)
-        return x
+#         # # 入力画像のサイズを取得
+#         # b, c, h, w = x.shape
+#         # # `view`関数の引数を動的に計算
+#         # x = x.view(-1, c * h * w)
+#         # x = nn.functional.relu(self.fc1(x))
+#         # x = self.fc2(x)
+#         return x
 
 
 @app.command()
@@ -273,26 +285,27 @@ def training(label: str, outlook: models.Outlook):
 
     BATCH_SIZE = 16
     MAX_EPOCH = 50
+    LABEL_COUNT = 4
     SHORT_PROGRESS_BAR = "{l_bar}{bar:10}{r_bar}{bar:-10b}"
 
-    print(f"label: {label}")
-    print(f"batch size: {BATCH_SIZE}")
-    print(f"max epoch: {MAX_EPOCH}")
+    logger.info(f"label: {label}")
+    logger.info(f"label count: {LABEL_COUNT}")
+    logger.info(f"batch size: {BATCH_SIZE}")
+    logger.info(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
     df = database.select_result_by_outlook(outlook, quartile=True)
-    # df = sandbox.db()
 
     # データの前処理
     transform = transforms.Compose(
         [
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
-            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
-    dataset = PolarsDataset(df, image_transform=transform)
+    dataset = PolarsDataset(df, label=label, image_transform=transform)
 
     n_samples = len(dataset)
     n_train = int(0.75 * n_samples)
@@ -311,23 +324,25 @@ def training(label: str, outlook: models.Outlook):
 
     device = torch.device("cuda")
 
-    # # モデルのインスタンス化
-    # model = CNNModel().to(device)
+    # 事前学習済みのViTをロード
+    model = timm.create_model(
+        "vit_small_patch16_224", pretrained=True, num_classes=LABEL_COUNT
+    )
 
     # 事前学習済みのResNet18をロード
     # model = torchvision.models.resnet152(pretrained=True)
-    model = timm.create_model("vit_small_patch16_224", pretrained=True, num_classes=4)
 
     # 入力画像のサイズに合わせて最初の畳み込み層を修正
     # model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
 
     # ラベル数に合わせて最後の全結合層を修正
     # num_ftrs = model.fc.in_features
-    # model.fc = nn.Linear(num_ftrs, 4)
+    # model.fc = nn.Linear(num_ftrs, LABEL_COUNT)
+
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()  # 分類なのでクロスエントロピー
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.0001)
+    optimizer = torch.optim.AdamW(model.parameters())
     # optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     logger.info("start training")
@@ -337,7 +352,6 @@ def training(label: str, outlook: models.Outlook):
 
             optimizer.zero_grad()
             outputs = model(images)
-            # loss = criterion(outputs, labels.float().view(-1, 1))
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -345,9 +359,10 @@ def training(label: str, outlook: models.Outlook):
         logger.info(f"Epoch {epoch + 1}, Loss: {round(loss.item(), 3)}")
 
         # テストデータでの評価
-        predicted_list = [0, 0, 0, 0]
+        pred_list = []
+        true_list = []
 
-        if epoch % 5 == 0:
+        if (epoch + 1) % 2 == 0:
             with torch.no_grad():
                 for images, labels in test_dataloader:
                     images, labels = images.to(device), labels.to(device)
@@ -357,17 +372,24 @@ def training(label: str, outlook: models.Outlook):
                     # logger.info(
                     #     f"predicted: {predicted}[確率: {probability}], labels: {labels}"
                     # )
-                    predicted_tensor = torch.argmax(outputs, dim=1)
+                    pred = torch.argmax(outputs, dim=1)
 
-                    for predicted in predicted_tensor.tolist():
-                        predicted_list[predicted] += 1
+                    pred_list += pred.detach().cpu().numpy().tolist()
+                    true_list += labels.detach().cpu().numpy().tolist()
             # logger.info(f"outputs: {outputs}")
             # logger.info(f"outputs.shape: {outputs.shape}")
             # logger.info(f"labels: {labels}")
             # logger.info(f"labels.shape: {labels.shape}")
 
             logger.info(f"Epoch {epoch + 1}(Test), Loss: {round(test_loss.item(), 3)}")
-            logger.info(f"predicted: {predicted_list}")
+
+            # Confusion matrixの生成
+            cm = confusion_matrix(
+                y_true=true_list,
+                y_pred=pred_list,
+            )
+            print(cm)
+            # logger.info(f"predicted: {predicted_list}")
 
     # モデルの保存
     file_name = f"./model/{outlook.value}_{round(test_loss.item(), 3)}.pth"
@@ -380,62 +402,62 @@ def training(label: str, outlook: models.Outlook):
     return
 
 
-@app.command()
-def predict():
-    logger.remove()
-    logger.add(stderr, level="INFO")
+# @app.command()
+# def predict():
+#     logger.remove()
+#     logger.add(stderr, level="INFO")
 
-    nikkei225 = fetcher.load_nikkei225_csv()
+#     nikkei225 = fetcher.load_nikkei225_csv()
 
-    model_bearish = CNNModel()
-    model_bearish.load_state_dict(torch.load("./model/Bearish_0.813.pth"))
+#     model_bearish = CNNModel()
+#     model_bearish.load_state_dict(torch.load("./model/Bearish_0.813.pth"))
 
-    model_neutral = CNNModel()
-    model_neutral.load_state_dict(torch.load("./model/Neutral_0.864.pth"))
+#     model_neutral = CNNModel()
+#     model_neutral.load_state_dict(torch.load("./model/Neutral_0.864.pth"))
 
-    model_bullish = CNNModel()
-    model_bullish.load_state_dict(torch.load("./model/Bullish_0.767.pth"))
+#     model_bullish = CNNModel()
+#     model_bullish.load_state_dict(torch.load("./model/Bullish_0.767.pth"))
 
-    i = 1
-    for code in nikkei225.get_column("code"):
-        df = fetcher.fetch_daily_quotes(code)
-        if df is None:
-            continue
+#     i = 1
+#     for code in nikkei225.get_column("code"):
+#         df = fetcher.fetch_daily_quotes(code)
+#         if df is None:
+#             continue
 
-        stock_sliced = df.tail(10)
-        df_sampled = stock_sliced.with_columns(
-            pl.col("date").str.to_date().alias("date")
-        )
-        img = create_candlestick_chart(df_sampled, code, "predict")
+#         stock_sliced = df.tail(10)
+#         df_sampled = stock_sliced.with_columns(
+#             pl.col("date").str.to_date().alias("date")
+#         )
+#         img = create_candlestick_chart(df_sampled, code, "predict")
 
-        image = Image.open(io.BytesIO(img)).convert("RGB")
-        image = torchvision.transforms.ToTensor()(image)
-        image = image.unsqueeze(0)
+#         image = Image.open(io.BytesIO(img)).convert("RGB")
+#         image = torchvision.transforms.ToTensor()(image)
+#         image = image.unsqueeze(0)
 
-        model_bullish.eval()
-        with torch.no_grad():
-            output = model_bullish(image)
-            predicted = torch.argmax(output, dim=1)
-            probability = torch.max(output, dim=1)
+#         model_bullish.eval()
+#         with torch.no_grad():
+#             output = model_bullish(image)
+#             predicted = torch.argmax(output, dim=1)
+#             probability = torch.max(output, dim=1)
 
-            logger.info(f"{code} Bullish: {predicted} [確率: {probability.values}]")
+#             logger.info(f"{code} Bullish: {predicted} [確率: {probability.values}]")
 
-        model_neutral.eval()
-        with torch.no_grad():
-            output = model_neutral(image)
-            predicted = torch.argmax(output, dim=1)
-            probability = torch.max(output, dim=1)
+#         model_neutral.eval()
+#         with torch.no_grad():
+#             output = model_neutral(image)
+#             predicted = torch.argmax(output, dim=1)
+#             probability = torch.max(output, dim=1)
 
-            logger.info(f"{code} Neutral: {predicted} [確率: {probability.values}]")
+#             logger.info(f"{code} Neutral: {predicted} [確率: {probability.values}]")
 
-        model_bearish.eval()
-        with torch.no_grad():
-            output = model_bearish(image)
-            predicted = torch.argmax(output, dim=1)
-            probability = torch.max(output, dim=1)
+#         model_bearish.eval()
+#         with torch.no_grad():
+#             output = model_bearish(image)
+#             predicted = torch.argmax(output, dim=1)
+#             probability = torch.max(output, dim=1)
 
-            logger.info(f"{code} Bearish: {predicted} [確率: {probability.values}]")
+#             logger.info(f"{code} Bearish: {predicted} [確率: {probability.values}]")
 
-        if i % 10 == 0:
-            logger.info(f"{i}/225 has been processed.")
-        i += 1
+#         if i % 10 == 0:
+#             logger.info(f"{i}/225 has been processed.")
+#         i += 1
