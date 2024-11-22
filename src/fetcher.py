@@ -59,7 +59,7 @@ def fetch_id_token():
     app_settings = load_settings()
     params = {"refreshtoken": app_settings.refresh_token}
 
-    print("Fetch ID token...")
+    logger.info("Fetch ID token...")
 
     r_post = requests.post(
         "https://api.jquants.com/v1/token/auth_refresh", params=params

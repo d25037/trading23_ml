@@ -86,7 +86,7 @@ def candle_stick(code: str):
 
 @app.command()
 def dataset(label: str):
-    batch_size = 128
+    batch_size = 256
 
     dataset = analyzer.SQLiteDataset(label)
     n_samples = len(dataset)

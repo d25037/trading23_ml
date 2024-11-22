@@ -27,14 +27,25 @@ def open_db():
         )
     """)
 
+    # conn.execute("""
+    #     CREATE TABLE IF NOT EXISTS result (
+    #         code TEXT NOT NULL,
+    #         date TEXT NOT NULL,
+    #         nextday_open FLOAT,
+    #         nextday_close FLOAT,
+    #         result_0 FLOAT,
+    #         result_1 FLOAT,
+    #         image BLOB
+    #     )
+    # """)
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS result (
             code TEXT NOT NULL,
             date TEXT NOT NULL,
-            nextday_open FLOAT,
-            nextday_close FLOAT,
-            result_0 FLOAT,
-            result_1 FLOAT,
+            day1_close FLOAT,
+            day3_close FLOAT,
+            day5_close FLOAT,
             image BLOB
         )
     """)
@@ -72,23 +83,27 @@ def insert_ohlc(df: pl.DataFrame):
     return
 
 
-def select_ohlc_by_code(conn: sqlite3.Connection, code: str):
+def select_ohlc_by_code(conn: sqlite3.Connection, code: str | int):
+    if isinstance(code, int):
+        code = str(code)
+
     code = code + "0"
     return pl.read_database(
         query=f"SELECT * FROM ohlc WHERE code={code}", connection=conn
     )
 
 
-def insert_result(conn: sqlite3.Connection, result: models.Result):
+def insert_result(conn: sqlite3.Connection, result: models.Result2):
     logger.debug(f"date: {result.date}")
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO result (code, date, nextday_open, nextday_close, image) values (?, ?, ?, ?, ?)",
+        "INSERT INTO result (code, date, day1_close, day3_close, day5_close, image) values (?, ?, ?, ?, ?, ?)",
         (
             result.code,
             result.date,
-            result.nextday_open,
-            result.nextday_close,
+            result.day1_close,
+            result.day3_close,
+            result.day5_close,
             result.image,
         ),
     )
@@ -99,16 +114,18 @@ def insert_result(conn: sqlite3.Connection, result: models.Result):
 
 
 @app.command("select-result")
-def select_result_by_outlook(outlook: models.Outlook, quartile: bool = False):
+def select_result_by_outlook(
+    outlook: models.Outlook, target: str, quartile: bool = False
+):
     logger.info(f"outlook: {outlook}")
     conn = open_db()
     lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
 
     if outlook != models.Outlook.ALL:
         expr = {
-            models.Outlook.BULLISH: pl.col("result_0") >= 0.75,
-            models.Outlook.BEARISH: pl.col("result_0") <= 0.25,
-        }.get(outlook, (pl.col("result_0") < 0.75) & (pl.col("result_0") > 0.25))
+            models.Outlook.BULLISH: pl.col(target) >= 0.75,
+            models.Outlook.BEARISH: pl.col(target) <= 0.25,
+        }.get(outlook, (pl.col(target) < 0.75) & (pl.col(target) > 0.25))
 
         df_date = (
             lf.group_by("date", maintain_order=True)
@@ -135,13 +152,13 @@ def select_result_by_outlook(outlook: models.Outlook, quartile: bool = False):
 
     df_describe = df.describe()
     threshold_25 = float(
-        df_describe.filter(pl.col("statistic") == "25%")["nextday_close"].item()
+        df_describe.filter(pl.col("statistic") == "25%")[target].item()
     )
     threshold_50 = float(
-        df_describe.filter(pl.col("statistic") == "50%")["nextday_close"].item()
+        df_describe.filter(pl.col("statistic") == "50%")[target].item()
     )
     threshold_75 = float(
-        df_describe.filter(pl.col("statistic") == "75%")["nextday_close"].item()
+        df_describe.filter(pl.col("statistic") == "75%")[target].item()
     )
 
     def categorize_by_nextday_close(value):
@@ -156,7 +173,7 @@ def select_result_by_outlook(outlook: models.Outlook, quartile: bool = False):
 
     # result_quartile カラムを作成
     df_new = df.with_columns(
-        pl.col("nextday_close")
+        pl.col(target)
         .map_elements(
             lambda value: categorize_by_nextday_close(value), return_dtype=pl.Int64
         )

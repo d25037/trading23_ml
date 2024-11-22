@@ -38,25 +38,22 @@ def is_cudable() -> None:
         print("ERROR: CUDA is unavailable")
 
 
-@app.command()
-def slice_df_for_candlestick():
-    conn = database.open_db()
-    df = database.select_ohlc_by_code(conn, "7203")
-    number = 1223
-
-    file_name = df[number - 1]["date"].item()
+def slice_df_for_candlestick(df: pl.DataFrame, number: int):
+    date = df[number - 1]["date"].item()
     close = df[number - 1]["close"].item()
+    code = df[number - 1]["code"].item()
 
-    nextday = df[number]
-    nextday_open = nextday["open"].item()
-    nextday_close = nextday["close"].item()
-    result_open = round(100 * (nextday_open - close) / close, 2)
-    result_close = round(100 * (nextday_close - close) / close, 2)
+    day1 = df[number]
+    day1_close = round(100 * (day1["close"].item() - close) / close, 2)
+    day3 = df[number + 3]
+    day3_close = round(100 * (day3["close"].item() - close) / close, 2)
+    day5 = df[number + 5]
+    day5_close = round(100 * (day5["close"].item() - close) / close, 2)
 
     stock_sliced = df.slice(number - 35, 35)
     df_sampled = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
-    img = create_candlestick_chart_from_df(df_sampled, "7203", file_name, write=True)
-    return
+    img = create_candlestick_chart_from_df(df_sampled, code, date, write=True)
+    return (img, date, day1_close, day3_close, day5_close)
 
 
 def create_candlestick_chart_from_df(
@@ -110,45 +107,49 @@ def create_candlestick_chart_from_df(
 
 
 @app.command()
-def create_data_set():
+def create_dataset():
     logger.remove()
     logger.add(stderr, level="INFO")
 
     conn = database.open_db()
 
     nikkei225 = fetcher.load_nikkei225_csv()
-    numbers = random.sample(range(20, 1100), 100)
+    numbers = random.sample(range(50, 1200), 300)
 
     for i, code in enumerate(nikkei225.get_column("code")):
-        df = fetcher.fetch_daily_quotes(code)
-        if df is None:
-            continue
-        if len(df) < 1100:
+        logger.info(f"Processing {code}...")
+        df = database.select_ohlc_by_code(conn, code=code).drop_nulls()
+
+        if len(df) < 1210:
             logger.info(f"{code} Data length is not enough: {len(df)}")
             continue
 
         for number in numbers:
-            file_name = df[number - 1]["date"].item()
-            close = df[number - 1]["close"].item()
-
-            nextday = df[number]
-            nextday_open = nextday["open"].item()
-            nextday_close = nextday["close"].item()
-            result_open = round(100 * (nextday_open - close) / close, 2)
-            result_close = round(100 * (nextday_close - close) / close, 2)
-
-            stock_sliced = df.slice(number - 10, 10)
-            df_sampled = stock_sliced.with_columns(
-                pl.col("date").str.to_date().alias("date")
+            (img, date, day1_close, day3_close, day5_close) = slice_df_for_candlestick(
+                df=df, number=number
             )
-            img = create_candlestick_chart_from_df(df_sampled, code, file_name)
+            # file_name = df[number - 1]["date"].item()
+            # close = df[number - 1]["close"].item()
 
-            result = models.Result(
+            # nextday = df[number]
+            # nextday_open = nextday["open"].item()
+            # nextday_close = nextday["close"].item()
+            # result_open = round(100 * (nextday_open - close) / close, 2)
+            # result_close = round(100 * (nextday_close - close) / close, 2)
+
+            # stock_sliced = df.slice(number - 10, 10)
+            # df_sampled = stock_sliced.with_columns(
+            #     pl.col("date").str.to_date().alias("date")
+            # )
+            # img = create_candlestick_chart_from_df(df_sampled, code, file_name)
+
+            result = models.Result2(
                 **{
                     "code": str(code),
-                    "date": file_name,
-                    "nextday_open": result_open,
-                    "nextday_close": result_close,
+                    "date": date,
+                    "day1_close": day1_close,
+                    "day3_close": day3_close,
+                    "day5_close": day5_close,
                     "image": img,
                 }
             )
@@ -202,7 +203,7 @@ class PolarsDataset(Dataset):
         image_transform: transforms.Compose | None = None,
     ):
         self.df = df
-        self.label = label
+        # self.label = label
         self.image_transform = image_transform
 
     def __len__(self):
@@ -218,7 +219,7 @@ class PolarsDataset(Dataset):
             image = transforms.ToTensor()(image)
 
         # label
-        label = self.df[self.label][idx]
+        label = self.df["result_quartile"][idx]
         label = torch.tensor(label, dtype=torch.long)
 
         return image, label
@@ -283,8 +284,8 @@ def training(label: str, outlook: models.Outlook):
     # 経過時間
     start = time.time()
 
-    BATCH_SIZE = 16
-    MAX_EPOCH = 50
+    BATCH_SIZE = 128
+    MAX_EPOCH = 1000
     LABEL_COUNT = 4
     SHORT_PROGRESS_BAR = "{l_bar}{bar:10}{r_bar}{bar:-10b}"
 
@@ -294,7 +295,7 @@ def training(label: str, outlook: models.Outlook):
     logger.info(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
-    df = database.select_result_by_outlook(outlook, quartile=True)
+    df = database.select_result_by_outlook(outlook, target=label, quartile=True)
 
     # データの前処理
     transform = transforms.Compose(
@@ -347,6 +348,7 @@ def training(label: str, outlook: models.Outlook):
 
     logger.info("start training")
     for epoch in range(MAX_EPOCH):
+        logger.info(f"Epoch {epoch + 1}")
         for images, labels in tqdm(train_dataloader, bar_format=SHORT_PROGRESS_BAR):
             images, labels = images.to(device), labels.to(device)
 
@@ -356,7 +358,7 @@ def training(label: str, outlook: models.Outlook):
             loss.backward()
             optimizer.step()
 
-        logger.info(f"Epoch {epoch + 1}, Loss: {round(loss.item(), 3)}")
+        logger.info(f"Training -- Loss: {round(loss.item(), 3)}")
 
         # テストデータでの評価
         pred_list = []
@@ -364,7 +366,9 @@ def training(label: str, outlook: models.Outlook):
 
         if (epoch + 1) % 2 == 0:
             with torch.no_grad():
-                for images, labels in test_dataloader:
+                for images, labels in tqdm(
+                    test_dataloader, bar_format=SHORT_PROGRESS_BAR
+                ):
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
                     test_loss = criterion(outputs, labels)
@@ -381,7 +385,7 @@ def training(label: str, outlook: models.Outlook):
             # logger.info(f"labels: {labels}")
             # logger.info(f"labels.shape: {labels.shape}")
 
-            logger.info(f"Epoch {epoch + 1}(Test), Loss: {round(test_loss.item(), 3)}")
+            logger.info(f"Test -- Loss: {round(test_loss.item(), 3)}")
 
             # Confusion matrixの生成
             cm = confusion_matrix(
@@ -391,9 +395,11 @@ def training(label: str, outlook: models.Outlook):
             print(cm)
             # logger.info(f"predicted: {predicted_list}")
 
-    # モデルの保存
-    file_name = f"./model/{outlook.value}_{round(test_loss.item(), 3)}.pth"
-    torch.save(model.state_dict(), file_name)
+        if (epoch + 1) % 100 == 0:
+            # モデルの保存
+            final_test_loss = (round(test_loss.item(), 3)) * 1000
+            file_name = f"./model/{outlook.value}_{final_test_loss}.pth"
+            torch.save(model.state_dict(), file_name)
 
     # 経過時間
     elapsed_time = time.time() - start
