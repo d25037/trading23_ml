@@ -27,17 +27,15 @@ def open_db():
         )
     """)
 
-    # conn.execute("""
-    #     CREATE TABLE IF NOT EXISTS result (
-    #         code TEXT NOT NULL,
-    #         date TEXT NOT NULL,
-    #         nextday_open FLOAT,
-    #         nextday_close FLOAT,
-    #         result_0 FLOAT,
-    #         result_1 FLOAT,
-    #         image BLOB
-    #     )
-    # """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS topix (
+            date TEXT NOT NULL,
+            open FLOAT,
+            high FLOAT,
+            low FLOAT,
+            close FLOAT
+        )
+    """)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS result (
@@ -63,12 +61,12 @@ def open_db():
     return conn
 
 
-def insert_ohlc(df: pl.DataFrame):
+def insert_ohlc(df: pl.DataFrame, table_name: str = "ohlc"):
     conn = open_db()
     df_pd: pd.DataFrame = df.to_pandas()
 
     df_pd.to_sql(
-        "ohlc",
+        table_name,
         conn,
         if_exists="append",
         index=False,
@@ -77,7 +75,7 @@ def insert_ohlc(df: pl.DataFrame):
     )
 
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM ohlc")
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
     record_count = cursor.fetchone()[0]
     logger.debug(f"number of records: {record_count}")
     return
@@ -91,6 +89,10 @@ def select_ohlc_by_code(conn: sqlite3.Connection, code: str | int):
     return pl.read_database(
         query=f"SELECT * FROM ohlc WHERE code={code}", connection=conn
     )
+
+
+def select_topix(conn: sqlite3.Connection):
+    return pl.read_database(query="SELECT * FROM topix", connection=conn).lazy()
 
 
 def insert_result(conn: sqlite3.Connection, result: schemas.Result2):

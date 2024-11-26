@@ -44,6 +44,18 @@ class DailyQuotes(BaseModel):
     daily_quotes: list[Ohlc]
 
 
+class TopixOhlc(BaseModel):
+    date: str = Field(alias="Date")
+    open: float | None = Field(alias="Open")
+    high: float | None = Field(alias="High")
+    low: float | None = Field(alias="Low")
+    close: float | None = Field(alias="Close")
+
+
+class Topix(BaseModel):
+    topix: list[TopixOhlc]
+
+
 class Result(BaseModel):
     code: str
     date: str

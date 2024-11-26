@@ -8,8 +8,28 @@ from typer import Typer
 import analyzer
 import database
 import fetcher
+import train
 
 app = Typer()
+
+
+@app.command()
+def topix():
+    conn = database.open_db()
+    lf = database.select_topix(conn)
+    lf = lf.with_columns(
+        (pl.col("close").shift(n=-1).alias("day1_close")),
+        (pl.col("close").shift(n=-3).alias("day3_close")),
+        (pl.col("close").shift(n=-5).alias("day5_close")),
+    )
+    lf = lf.with_columns(
+        [
+            (pl.col("day1_close") / pl.col("close")).alias("result_1"),
+            (pl.col("day3_close") / pl.col("close")).alias("result_3"),
+            (pl.col("day5_close") / pl.col("close")).alias("result_5"),
+        ]
+    )
+    logger.debug(lf.drop_nulls().collect())
 
 
 @app.command()
@@ -84,11 +104,20 @@ def candle_stick(code: str):
     analyzer.create_candlestick_chart_from_df(df, code, "test", write=True)
 
 
+def dataset_reader():
+    dataset = train.SQLiteDataset("day1_morning")
+    item = dataset.__getitem__(0)
+
+    print(item)
+    print(f"item[0].shape: {dataset.__getitem__(0)[0].shape}")
+    print(f"item[1].shape: {dataset.__getitem__(0)[1]}")
+
+
 @app.command()
 def dataset(label: str):
     batch_size = 256
 
-    dataset = analyzer.SQLiteDataset(label)
+    dataset = train.SQLiteDataset(label)
     n_samples = len(dataset)
     n_train = int(0.75 * n_samples)
     n_test = n_samples - n_train

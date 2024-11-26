@@ -5,6 +5,7 @@ from sys import stderr
 import polars as pl
 import requests
 from loguru import logger
+from tqdm import tqdm
 from typer import Typer
 
 import constants
@@ -22,9 +23,17 @@ def load_settings():
         return items
 
 
-@app.command("nikkei225")
+@app.command("csv-nikkei225")
 def load_nikkei225_csv() -> pl.DataFrame:
     with open(f"{constants.NIKKEI225_PATH}") as f:
+        df = pl.read_csv(f)
+        logger.debug(df)
+    return df
+
+
+@app.command("csv-topix400")
+def load_topix400_csv() -> pl.DataFrame:
+    with open(f"{constants.TOPIX400_PATH}") as f:
         df = pl.read_csv(f)
         logger.debug(df)
     return df
@@ -79,6 +88,14 @@ def fetch_id_token():
     logger.info(f"ID token was saved to {constants.APP_SETTINGS_PATH}")
 
 
+@app.command("tokens")
+def fetch_tokens():
+    logger.remove()
+    logger.add(stderr, level="INFO")
+    fetch_refresh_token()
+    fetch_id_token()
+
+
 @app.command("daily-quotes")
 def fetch_daily_quotes(code: str, insert_db: bool = False):
     app_settings = load_settings()
@@ -116,10 +133,50 @@ def fetch_nikkei225():
     logger.add(stderr, level="INFO")
 
     nikkei225 = load_nikkei225_csv()
-    for i, code in enumerate(nikkei225.get_column("code")):
+    code_list = nikkei225.get_column("code").to_list()
+    for code in tqdm(code_list):
         fetch_daily_quotes(code, insert_db=True)
-        if (i + 1) % 10 == 0:
-            logger.info(f"{i+1}/225 has been processed.")
+
+
+@app.command("topix400")
+def fetch_topix400():
+    logger.remove()
+    logger.add(stderr, level="INFO")
+
+    topix400 = load_topix400_csv()
+    code_list = topix400.get_column("code").to_list()
+    for code in tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR):
+        fetch_daily_quotes(code, insert_db=True)
+
+
+@app.command("topix")
+def fetch_topix(insert_db: bool = False):
+    app_settings = load_settings()
+    headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
+
+    logger.info("Fetch Topix")
+
+    r = requests.get(
+        "https://api.jquants.com/v1/indices/topix",
+        headers=headers,
+    )
+    if r.status_code != 200:
+        logger.error(f"Failed to fetch Topix: {r.status_code}")
+        logger.error(r.json())
+        return
+
+    logger.info("Successfully fetched Topix")
+    topix = schemas.Topix(**r.json())
+    logger.debug(topix.topix)
+    logger.debug(f"len: {len(topix.topix)}")
+
+    df = pl.DataFrame(topix.model_dump()["topix"])
+    logger.debug(df)
+
+    if insert_db:
+        insert_ohlc(df, table_name="topix")
+
+    return df
 
 
 @app.command("training-calendar")

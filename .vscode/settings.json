@@ -15,6 +15,7 @@
 		"refreshtoken",
 		"relu",
 		"returnfig",
+		"topix",
 		"torchvision",
 		"typer",
 		"xticks",
