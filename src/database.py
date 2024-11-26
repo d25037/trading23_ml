@@ -5,7 +5,7 @@ import polars as pl
 from loguru import logger
 from typer import Typer
 
-import models
+import schemas
 from constants import DB_PATH
 
 app = Typer(no_args_is_help=True)
@@ -93,7 +93,7 @@ def select_ohlc_by_code(conn: sqlite3.Connection, code: str | int):
     )
 
 
-def insert_result(conn: sqlite3.Connection, result: models.Result2):
+def insert_result(conn: sqlite3.Connection, result: schemas.Result2):
     logger.debug(f"date: {result.date}")
     cur = conn.cursor()
     cur.execute(
@@ -115,16 +115,16 @@ def insert_result(conn: sqlite3.Connection, result: models.Result2):
 
 @app.command("select-result")
 def select_result_by_outlook(
-    outlook: models.Outlook, target: str, quartile: bool = False
+    outlook: schemas.Outlook, target: str, quartile: bool = False
 ):
     logger.info(f"outlook: {outlook}")
     conn = open_db()
     lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
 
-    if outlook != models.Outlook.ALL:
+    if outlook != schemas.Outlook.ALL:
         expr = {
-            models.Outlook.BULLISH: pl.col(target) >= 0.75,
-            models.Outlook.BEARISH: pl.col(target) <= 0.25,
+            schemas.Outlook.BULLISH: pl.col(target) >= 0.75,
+            schemas.Outlook.BEARISH: pl.col(target) <= 0.25,
         }.get(outlook, (pl.col(target) < 0.75) & (pl.col(target) > 0.25))
 
         df_date = (

@@ -23,7 +23,7 @@ from typer import Typer
 
 import database
 import fetcher
-import models
+import schemas
 
 app = Typer(no_args_is_help=True)
 
@@ -143,7 +143,7 @@ def create_dataset():
             # )
             # img = create_candlestick_chart_from_df(df_sampled, code, file_name)
 
-            result = models.Result2(
+            result = schemas.Result2(
                 **{
                     "code": str(code),
                     "date": date,
@@ -280,7 +280,7 @@ class SQLiteDataset(Dataset):
 
 
 @app.command()
-def training(label: str, outlook: models.Outlook):
+def training(label: str, outlook: schemas.Outlook):
     # 経過時間
     start = time.time()
 

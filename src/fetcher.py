@@ -8,7 +8,7 @@ from loguru import logger
 from typer import Typer
 
 import constants
-import models
+import schemas
 from database import insert_ohlc
 
 app = Typer(no_args_is_help=True)
@@ -17,7 +17,7 @@ app = Typer(no_args_is_help=True)
 @app.command("settings")
 def load_settings():
     with open(f"{constants.APP_SETTINGS_PATH}", "r") as f:
-        items = models.AppSettings(**json.load(f))
+        items = schemas.AppSettings(**json.load(f))
         logger.debug(items)
         return items
 
@@ -46,7 +46,7 @@ def fetch_refresh_token():
         logger.error(f"Failed to fetch Refresh token: {r_post.status_code}")
         return
 
-    refresh_token = models.RefreshToken(**r_post.json()).refresh_token
+    refresh_token = schemas.RefreshToken(**r_post.json()).refresh_token
     app_settings.refresh_token = refresh_token
     with open(f"{constants.APP_SETTINGS_PATH}", "w") as f:
         json.dump(app_settings.model_dump(), f)
@@ -71,7 +71,7 @@ def fetch_id_token():
         logger.error(r_post.json())
         return
 
-    id_token = models.IdToken(**r_post.json()).id_token
+    id_token = schemas.IdToken(**r_post.json()).id_token
     app_settings.id_token = id_token
     with open(f"{constants.APP_SETTINGS_PATH}", "w") as f:
         json.dump(app_settings.model_dump(), f)
@@ -98,7 +98,7 @@ def fetch_daily_quotes(code: str, insert_db: bool = False):
         return
 
     logger.info(f"Successfully fetched Daily Quotes of {code}")
-    daily_quotes = models.DailyQuotes(**r.json())
+    daily_quotes = schemas.DailyQuotes(**r.json())
     logger.debug(daily_quotes.daily_quotes)
     logger.debug(f"len: {len(daily_quotes.daily_quotes)}")
 
