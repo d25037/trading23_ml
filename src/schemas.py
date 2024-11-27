@@ -78,3 +78,8 @@ class Outlook(Enum):
     BEARISH = "Bearish"
     NEUTRAL = "Neutral"
     ALL = "All"
+
+
+class CsvFile(Enum):
+    NIKKEI225 = "Nikkei225"
+    TOPIX400 = "Topix400"

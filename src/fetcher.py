@@ -23,17 +23,14 @@ def load_settings():
         return items
 
 
-@app.command("csv-nikkei225")
-def load_nikkei225_csv() -> pl.DataFrame:
-    with open(f"{constants.NIKKEI225_PATH}") as f:
-        df = pl.read_csv(f)
-        logger.debug(df)
-    return df
+@app.command("csv")
+def load_csv(index: schemas.CsvFile):
+    if index == schemas.CsvFile.NIKKEI225:
+        file_name = constants.NIKKEI225_PATH
+    elif index == schemas.CsvFile.TOPIX400:
+        file_name = constants.TOPIX400_PATH
 
-
-@app.command("csv-topix400")
-def load_topix400_csv() -> pl.DataFrame:
-    with open(f"{constants.TOPIX400_PATH}") as f:
+    with open(f"{file_name}") as f:
         df = pl.read_csv(f)
         logger.debug(df)
     return df
@@ -132,7 +129,7 @@ def fetch_nikkei225():
     logger.remove()
     logger.add(stderr, level="INFO")
 
-    nikkei225 = load_nikkei225_csv()
+    nikkei225 = load_csv(schemas.CsvFile.NIKKEI225)
     code_list = nikkei225.get_column("code").to_list()
     for code in tqdm(code_list):
         fetch_daily_quotes(code, insert_db=True)
@@ -143,7 +140,7 @@ def fetch_topix400():
     logger.remove()
     logger.add(stderr, level="INFO")
 
-    topix400 = load_topix400_csv()
+    topix400 = load_csv(schemas.CsvFile.TOPIX400)
     code_list = topix400.get_column("code").to_list()
     for code in tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR):
         fetch_daily_quotes(code, insert_db=True)
