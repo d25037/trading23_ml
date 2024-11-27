@@ -73,6 +73,15 @@ class Result2(BaseModel):
     image: bytes
 
 
+class Result3(BaseModel):
+    code: str
+    date: str
+    result_1: float
+    result_3: float
+    result_5: float
+    image: bytes
+
+
 class Outlook(Enum):
     BULLISH = "Bullish"
     BEARISH = "Bearish"

@@ -14,22 +14,12 @@ app = Typer()
 
 
 @app.command()
-def topix():
-    conn = database.open_db()
-    lf = database.select_topix(conn)
-    lf = lf.with_columns(
-        (pl.col("close").shift(n=-1).alias("day1_close")),
-        (pl.col("close").shift(n=-3).alias("day3_close")),
-        (pl.col("close").shift(n=-5).alias("day5_close")),
-    )
-    lf = lf.with_columns(
-        [
-            (pl.col("day1_close") / pl.col("close")).alias("result_1"),
-            (pl.col("day3_close") / pl.col("close")).alias("result_3"),
-            (pl.col("day5_close") / pl.col("close")).alias("result_5"),
-        ]
-    )
-    logger.debug(lf.drop_nulls().collect())
+def suji():
+    code = "13010"
+    if len(code) > 4:
+        code = code[:-1]
+
+    print(code)
 
 
 @app.command()

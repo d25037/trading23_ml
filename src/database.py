@@ -41,9 +41,9 @@ def open_db():
         CREATE TABLE IF NOT EXISTS result (
             code TEXT NOT NULL,
             date TEXT NOT NULL,
-            day1_close FLOAT,
-            day3_close FLOAT,
-            day5_close FLOAT,
+            result_1 FLOAT,
+            result_3 FLOAT,
+            result_5 FLOAT,
             image BLOB
         )
     """)
@@ -95,17 +95,17 @@ def select_topix(conn: sqlite3.Connection):
     return pl.read_database(query="SELECT * FROM topix", connection=conn).lazy()
 
 
-def insert_result(conn: sqlite3.Connection, result: schemas.Result2):
+def insert_result(conn: sqlite3.Connection, result: schemas.Result3):
     logger.debug(f"date: {result.date}")
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO result (code, date, day1_close, day3_close, day5_close, image) values (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO result (code, date, result_1, result_3, result_5, image) values (?, ?, ?, ?, ?, ?)",
         (
             result.code,
             result.date,
-            result.day1_close,
-            result.day3_close,
-            result.day5_close,
+            result.result_1,
+            result.result_3,
+            result.result_5,
             result.image,
         ),
     )
@@ -118,7 +118,7 @@ def insert_result(conn: sqlite3.Connection, result: schemas.Result2):
 @app.command("select-result")
 def select_result_by_outlook(
     outlook: schemas.Outlook, target: str, quartile: bool = False
-):
+) -> pl.DataFrame:
     logger.info(f"outlook: {outlook}")
     conn = open_db()
     lf = pl.read_database(query="SELECT * FROM result", connection=conn).lazy()
@@ -189,3 +189,92 @@ def select_result_by_outlook(
     )
 
     return df_new
+
+
+def select_ohlc_or_topix_with_future_close(
+    code_or_topix: str, conn: sqlite3.Connection | None
+) -> pl.DataFrame:
+    if code_or_topix == "topix":
+        query = "SELECT * FROM topix"
+        column_name = "topix"
+    else:
+        query = f"SELECT * FROM ohlc WHERE code={code_or_topix}0"
+        column_name = "result"
+
+    if conn is None:
+        conn = open_db()
+
+    lf = (
+        pl.read_database(query=query, connection=conn)
+        .lazy()
+        .sort("date")
+        .drop_nulls()
+        .with_columns(
+            [
+                pl.col("close").shift(-1).alias("day1_close"),
+                pl.col("close").shift(-3).alias("day3_close"),
+                pl.col("close").shift(-5).alias("day5_close"),
+            ]
+        )
+        .drop_nulls()
+        .with_columns(
+            [
+                (pl.col("day1_close") / pl.col("close"))
+                .round(4)
+                .alias(f"{column_name}_1"),
+                (pl.col("day3_close") / pl.col("close"))
+                .round(4)
+                .alias(f"{column_name}_3"),
+                (pl.col("day5_close") / pl.col("close"))
+                .round(4)
+                .alias(f"{column_name}_5"),
+            ]
+        )
+    )
+    df = lf.collect()
+    logger.debug(df)
+    return df
+
+
+@app.command()
+def select_ohlc_with_result_binary(code: str):
+    conn = open_db()
+
+    df1 = select_ohlc_or_topix_with_future_close(code, conn)
+    topix_df = select_ohlc_or_topix_with_future_close("topix", conn)
+
+    df3 = (
+        df1.join(topix_df, on="date", how="left")
+        .drop_nulls()
+        .drop(
+            [
+                "day1_close_right",
+                "day3_close_right",
+                "day5_close_right",
+                "close_right",
+            ]
+        )
+    )
+
+    logger.debug(df3)
+
+    df4 = df3.with_columns(
+        [
+            pl.when(pl.col("result_1") > pl.col("topix_1"))
+            .then(1)
+            .otherwise(0)
+            .alias("result_1_binary"),
+            pl.when(pl.col("result_3") > pl.col("topix_3"))
+            .then(1)
+            .otherwise(0)
+            .alias("result_3_binary"),
+            pl.when(pl.col("result_5") > pl.col("topix_5"))
+            .then(1)
+            .otherwise(0)
+            .alias("result_5_binary"),
+        ]
+    )
+    df4 = df4.drop(["topix_1", "topix_3", "topix_5"])
+    logger.debug(df4)
+
+    return df4

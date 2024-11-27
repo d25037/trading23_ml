@@ -7,10 +7,13 @@ import matplotlib.pyplot
 import mplfinance as mpf  # type: ignore
 import pandas as pd
 import polars as pl
+import psutil
 from loguru import logger
 from PIL import Image
+from tqdm import tqdm
 from typer import Typer
 
+import constants
 import database
 import fetcher
 import schemas
@@ -20,27 +23,30 @@ app = Typer(no_args_is_help=True)
 
 def slice_df_for_candlestick(df: pl.DataFrame, number: int):
     date = df[number - 1]["date"].item()
-    close = df[number - 1]["close"].item()
+    # close = df[number - 1]["close"].item()
     code = df[number - 1]["code"].item()
+    result_1 = df[number - 1]["result_1"].item()
+    result_3 = df[number - 1]["result_3"].item()
+    result_5 = df[number - 1]["result_5"].item()
 
-    day1 = df[number]
-    day1_close = round(100 * (day1["close"].item() - close) / close, 2)
-    day3 = df[number + 3]
-    day3_close = round(100 * (day3["close"].item() - close) / close, 2)
-    day5 = df[number + 5]
-    day5_close = round(100 * (day5["close"].item() - close) / close, 2)
+    # day1 = df[number]
+    # day1_close = round(100 * (df[number - 1]["day1_close"].item() - close) / close, 2)
+    # day3 = df[number + 3]
+    # day3_close = round(100 * (df[number - 1]["day3_close"].item() - close) / close, 2)
+    # day5 = df[number + 5]
+    # day5_close = round(100 * (df[number - 1]["day5_close"].item() - close) / close, 2)
 
-    stock_sliced = df.slice(number - 35, 35)
+    stock_sliced = df.slice(number - 21, 21)
     df_sampled = stock_sliced.with_columns(pl.col("date").str.to_date().alias("date"))
     img = create_candlestick_chart_from_df(df_sampled, code, date, write=True)
-    return (img, date, day1_close, day3_close, day5_close)
+    return (img, date, result_1, result_3, result_5)
 
 
 def create_candlestick_chart_from_df(
     df: pl.DataFrame,
     code: str,
     file_name: str,
-    volume: bool = False,
+    with_volume: bool = False,
     write: bool = False,
 ):
     # DataFrameをmplfinanceの形式に変換
@@ -53,11 +59,11 @@ def create_candlestick_chart_from_df(
     fig, ax_list = mpf.plot(
         ohlc_data,
         type="candle",
-        volume=volume,
+        volume=with_volume,
         style="yahoo",
         figsize=(3, 3),
         returnfig=True,
-        mav=(5, 25),
+        mav=(5),
     )
 
     # 横軸と縦軸の目盛りを非表示にする
@@ -67,7 +73,8 @@ def create_candlestick_chart_from_df(
 
     # チャートを画像として保存
     if write:
-        dir_path = f"./data/img/{code}"
+        dir_name = code[:-1]
+        dir_path = f"./data/img/{dir_name}"
         os.makedirs(dir_path, exist_ok=True)
         fig.savefig(f"{dir_path}/{file_name}.png")
 
@@ -93,51 +100,42 @@ def create_dataset():
 
     conn = database.open_db()
 
-    nikkei225 = fetcher.load_nikkei225_csv()
-    numbers = random.sample(range(50, 1200), 300)
+    topix400 = fetcher.load_csv(schemas.CsvFile.TOPIX400)
+    numbers = random.sample(range(50, 1200), 1000)
 
-    for i, code in enumerate(nikkei225.get_column("code")):
+    for code in tqdm(
+        topix400.get_column("code"), bar_format=constants.SHORT_PROGRESS_BAR
+    ):
         logger.info(f"Processing {code}...")
-        df = database.select_ohlc_by_code(conn, code=code).drop_nulls()
+        df = database.select_ohlc_or_topix_with_future_close(code, conn)
 
         if len(df) < 1210:
             logger.info(f"{code} Data length is not enough: {len(df)}")
             continue
 
-        for number in numbers:
-            (img, date, day1_close, day3_close, day5_close) = slice_df_for_candlestick(
+        for number in tqdm(numbers, bar_format=constants.SHORT_PROGRESS_BAR):
+            (img, date, result_1, result_3, result_5) = slice_df_for_candlestick(
                 df=df, number=number
             )
-            # file_name = df[number - 1]["date"].item()
-            # close = df[number - 1]["close"].item()
 
-            # nextday = df[number]
-            # nextday_open = nextday["open"].item()
-            # nextday_close = nextday["close"].item()
-            # result_open = round(100 * (nextday_open - close) / close, 2)
-            # result_close = round(100 * (nextday_close - close) / close, 2)
-
-            # stock_sliced = df.slice(number - 10, 10)
-            # df_sampled = stock_sliced.with_columns(
-            #     pl.col("date").str.to_date().alias("date")
-            # )
-            # img = create_candlestick_chart_from_df(df_sampled, code, file_name)
-
-            result = schemas.Result2(
+            result = schemas.Result3(
                 **{
                     "code": str(code),
                     "date": date,
-                    "day1_close": day1_close,
-                    "day3_close": day3_close,
-                    "day5_close": day5_close,
+                    "result_1": result_1,
+                    "result_3": result_3,
+                    "result_5": result_5,
                     "image": img,
                 }
             )
 
             database.insert_result(conn, result)
 
-        if (i + 1) % 10 == 0:
-            logger.info(f"{i+1}/225 has been processed.")
+            # メモリリーク対策
+            matplotlib.pyplot.close("all")
+            # mem = psutil.virtual_memory().used / 1e9
+            # mem = round(mem, 1)
+            # logger.info(f"Memory Usage: {mem} GB")
 
     return
 

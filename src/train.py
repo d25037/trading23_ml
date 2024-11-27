@@ -1,5 +1,6 @@
 import io
 import time
+from datetime import datetime
 
 import polars as pl
 import timm
@@ -118,6 +119,9 @@ class SQLiteDataset(Dataset):
 def training(label: str, outlook: schemas.Outlook):
     # 経過時間
     start = time.time()
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.add(f"./logs/{now}.log", level="DEBUG")
 
     BATCH_SIZE = 128
     MAX_EPOCH = 1000

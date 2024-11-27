@@ -5,3 +5,4 @@ __pycache__/
 app_settings.json
 data/
 model/
+logs/
