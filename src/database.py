@@ -48,16 +48,6 @@ def open_db():
         )
     """)
 
-    # conn.execute("""
-    #     CREATE TABLE IF NOT EXISTS result_wo_volume (
-    #         code TEXT NOT NULL,
-    #         date TEXT NOT NULL
-    #         nextday_open FLOAT,
-    #         nextday_close FLOAT,
-    #         image BLOB
-    #     )
-    # """)
-
     return conn
 
 
@@ -278,3 +268,35 @@ def select_ohlc_with_result_binary(code: str):
     logger.debug(df4)
 
     return df4
+
+
+@app.command()
+def select_results_binary() -> pl.DataFrame:
+    conn = open_db()
+    df = pl.read_database(query="SELECT * FROM result", connection=conn)
+
+    topix_df = select_ohlc_or_topix_with_future_close("topix", conn)
+
+    df_joined = df.join(topix_df, on="date", how="left").drop_nulls()
+
+    logger.debug(df_joined)
+
+    df_compared = df_joined.with_columns(
+        [
+            pl.when(pl.col("result_1") > pl.col("topix_1"))
+            .then(1)
+            .otherwise(0)
+            .alias("result_1_binary"),
+            pl.when(pl.col("result_3") > pl.col("topix_3"))
+            .then(1)
+            .otherwise(0)
+            .alias("result_3_binary"),
+            pl.when(pl.col("result_5") > pl.col("topix_5"))
+            .then(1)
+            .otherwise(0)
+            .alias("result_5_binary"),
+        ]
+    )
+    logger.debug(df_compared)
+
+    return df_compared

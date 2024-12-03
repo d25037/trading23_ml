@@ -15,6 +15,7 @@ from torchvision import transforms
 from tqdm import tqdm
 from typer import Typer
 
+import constants
 import database
 import schemas
 
@@ -24,11 +25,11 @@ app = Typer(no_args_is_help=True)
 @app.command("cudable")
 def is_cudable() -> None:
     if torch.cuda.is_available():
-        print("CUDA is available")
-        print(f"Torch CUDA version: {torch.__version__}")
-        print(f"Device Name: {torch.cuda.get_device_name()}")
+        logger.info("CUDA is available")
+        logger.info(f"Torch CUDA version: {torch.__version__}")
+        logger.info(f"Device Name: {torch.cuda.get_device_name()}")
     else:
-        print("ERROR: CUDA is unavailable")
+        logger.error("ERROR: CUDA is unavailable")
 
 
 class PolarsDataset(Dataset):
@@ -39,7 +40,7 @@ class PolarsDataset(Dataset):
         image_transform: transforms.Compose | None = None,
     ):
         self.df = df
-        # self.label = label
+        self.label = label
         self.image_transform = image_transform
 
     def __len__(self):
@@ -55,7 +56,7 @@ class PolarsDataset(Dataset):
             image = transforms.ToTensor()(image)
 
         # label
-        label = self.df["result_quartile"][idx]
+        label = self.df[f"{self.label}_binary"][idx]
         label = torch.tensor(label, dtype=torch.long)
 
         return image, label
@@ -116,17 +117,16 @@ class SQLiteDataset(Dataset):
 
 
 @app.command()
-def training(label: str, outlook: schemas.Outlook):
+def run(label: str):
     # 経過時間
     start = time.time()
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     logger.add(f"./logs/{now}.log", level="DEBUG")
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = 64
     MAX_EPOCH = 1000
-    LABEL_COUNT = 4
-    SHORT_PROGRESS_BAR = "{l_bar}{bar:10}{r_bar}{bar:-10b}"
+    LABEL_COUNT = 2
 
     logger.info(f"label: {label}")
     logger.info(f"label count: {LABEL_COUNT}")
@@ -134,11 +134,13 @@ def training(label: str, outlook: schemas.Outlook):
     logger.info(f"max epoch: {MAX_EPOCH}")
     print("--------------------")
 
-    df = database.select_result_by_outlook(outlook, target=label, quartile=True)
+    # df = database.select_result_by_outlook(outlook, target=label, quartile=True)
+    df = database.select_results_binary()
 
     # データの前処理
     transform = transforms.Compose(
         [
+            # transforms.Resize((300, 300)),
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -150,7 +152,15 @@ def training(label: str, outlook: schemas.Outlook):
     n_samples = len(dataset)
     n_train = int(0.75 * n_samples)
     n_test = n_samples - n_train
-    train_dataset, test_dataset = random_split(dataset, [n_train, n_test])
+
+    # 固定されたシード値を設定
+    torch.manual_seed(42)  # 例：シード値を42に設定
+    # 乱数ジェネレータを作成
+    generator = torch.Generator().manual_seed(42)
+
+    train_dataset, test_dataset = random_split(
+        dataset, [n_train, n_test], generator=generator
+    )
 
     # ランダムサンプリング
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -159,15 +169,13 @@ def training(label: str, outlook: schemas.Outlook):
 
     # CUDAが使えない場合はエラーを出力して終了
     if not torch.cuda.is_available():
-        logger.error("CUDA is not available")
+        logger.error("CUDA is unavailable")
         return
 
     device = torch.device("cuda")
 
     # 事前学習済みのViTをロード
-    model = timm.create_model(
-        "vit_small_patch16_224", pretrained=True, num_classes=LABEL_COUNT
-    )
+    model = timm.create_model("resnet50", pretrained=True, num_classes=LABEL_COUNT)
 
     # 事前学習済みのResNet18をロード
     # model = torchvision.models.resnet152(pretrained=True)
@@ -188,7 +196,9 @@ def training(label: str, outlook: schemas.Outlook):
     logger.info("start training")
     for epoch in range(MAX_EPOCH):
         logger.info(f"Epoch {epoch + 1}")
-        for images, labels in tqdm(train_dataloader, bar_format=SHORT_PROGRESS_BAR):
+        for images, labels in tqdm(
+            train_dataloader, bar_format=constants.SHORT_PROGRESS_BAR
+        ):
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()
@@ -206,7 +216,7 @@ def training(label: str, outlook: schemas.Outlook):
         if (epoch + 1) % 2 == 0:
             with torch.no_grad():
                 for images, labels in tqdm(
-                    test_dataloader, bar_format=SHORT_PROGRESS_BAR
+                    test_dataloader, bar_format=constants.SHORT_PROGRESS_BAR
                 ):
                     images, labels = images.to(device), labels.to(device)
                     outputs = model(images)
@@ -234,10 +244,10 @@ def training(label: str, outlook: schemas.Outlook):
             print(cm)
             # logger.info(f"predicted: {predicted_list}")
 
-        if (epoch + 1) % 100 == 0:
+        if (epoch + 1) % 10 == 0:
             # モデルの保存
             final_test_loss = (round(test_loss.item(), 3)) * 1000
-            file_name = f"./model/{outlook.value}_{final_test_loss}.pth"
+            file_name = f"./model/efficientnet_{final_test_loss}.pth"
             torch.save(model.state_dict(), file_name)
 
     # 経過時間

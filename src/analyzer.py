@@ -133,9 +133,10 @@ def create_dataset():
 
             # メモリリーク対策
             matplotlib.pyplot.close("all")
-            # mem = psutil.virtual_memory().used / 1e9
-            # mem = round(mem, 1)
-            # logger.info(f"Memory Usage: {mem} GB")
+
+        mem = psutil.virtual_memory().used / 1e9
+        mem = round(mem, 1)
+        logger.info(f"Memory Usage: {mem} GB")
 
     return
 
