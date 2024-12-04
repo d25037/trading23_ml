@@ -32,6 +32,14 @@ def is_cudable() -> None:
         logger.error("ERROR: CUDA is unavailable")
 
 
+@app.command()
+def timm_list(model_name: str) -> None:
+    model_name = f"*{model_name}*"
+    models_list = timm.list_models(model_name, pretrained=True)
+    for model in models_list:
+        logger.info(model)
+
+
 class PolarsDataset(Dataset):
     def __init__(
         self,

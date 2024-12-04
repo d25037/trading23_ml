@@ -14,6 +14,14 @@ app = Typer()
 
 
 @app.command()
+def timm():
+    import timm
+
+    model = timm.create_model("resnet18", pretrained=True)
+    print(model)
+
+
+@app.command()
 def suji():
     code = "13010"
     if len(code) > 4:
