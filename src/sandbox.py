@@ -1,24 +1,97 @@
+import time
+
+import matplotlib.pyplot as plt
 import polars as pl
 import torch
 from loguru import logger
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm
 from typer import Typer
 
 import analyzer
+import constants
 import database
 import fetcher
+import schemas
 import train
 
 app = Typer()
 
 
 @app.command()
-def timm():
-    import timm
+def test_tqdm():
+    nikkei225 = fetcher.load_csv(schemas.CsvFile.NIKKEI225)
+    code_list = nikkei225.get_column("code").to_list()
 
-    model = timm.create_model("resnet18", pretrained=True)
-    print(model)
+    pbar = tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR, desc="Processing")
+
+    for code in pbar:
+        pbar.set_postfix({"message": f"ロング候補に追加: {code}"})
+        pbar.set_description(f"Processing {code}")
+        time.sleep(0.1)
+
+
+@app.command()
+def to_text():
+    buffer = ""
+    list = [2234, 4533, 9752]
+    for item in list:
+        buffer = f"{buffer},TSE:{item}"
+    # bufferの2文字目からにする
+    buffer = buffer[1:]
+    logger.debug(buffer)
+    # bufferをoutputsディレクトリに.txtファイルとして出力
+    with open("outputs/stock_list.txt", "w") as f:
+        f.write(buffer)
+    return
+
+
+@app.command()
+def history():
+    # CSV を LazyFrame として読み込み
+    df = pl.scan_csv("data/trade_history/DOMESTIC_STOCK_20250212150310.csv")
+
+    # 約定日ごとに約定金額を合計
+    df_daily_sum = df.group_by("約定日", maintain_order=True).agg(
+        pl.col("実現損益").sum().alias("daily_sum")
+    )
+
+    # 実際の計算を行い、DataFrame に変換
+    df_daily_sum = df_daily_sum.collect()
+
+    # 約定日でソート（文字列型の場合の例：必要に応じて修正）
+    df_daily_sum = df_daily_sum.sort("約定日")
+
+    # 累計カラムを追加
+    df_daily_sum = df_daily_sum.with_columns(
+        (pl.col("daily_sum").cum_sum().alias("cumulative_sum"))
+    )
+
+    # Filter out rows where the date is None
+    df_daily_sum = df_daily_sum.filter(pl.col("約定日").is_not_null())
+
+    # matplotlib で折れ線グラフとしてプロット
+    x = df_daily_sum["約定日"]
+    y = df_daily_sum["cumulative_sum"]
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(x, y, marker="o", label="Cumulative Sum")
+    plt.title("日別 約定金額の累計")
+    plt.xlabel("約定日")
+    plt.ylabel("累計約定金額")
+    plt.xticks(rotation=45)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+# @app.command()
+# def timm():
+#     import timm
+
+#     model = timm.create_model("resnet18", pretrained=True)
+#     print(model)
 
 
 @app.command()

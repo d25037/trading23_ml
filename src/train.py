@@ -17,7 +17,6 @@ from typer import Typer
 
 import constants
 import database
-import schemas
 
 app = Typer(no_args_is_help=True)
 

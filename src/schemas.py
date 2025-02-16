@@ -92,3 +92,9 @@ class Outlook(Enum):
 class CsvFile(Enum):
     NIKKEI225 = "Nikkei225"
     TOPIX400 = "Topix400"
+
+
+class StockStatus(Enum):
+    BULLISH = "Bullish"
+    BEARISH = "Bearish"
+    NEUTRAL = "Neutral"

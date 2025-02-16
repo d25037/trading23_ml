@@ -11,6 +11,7 @@
 		"mplfinance",
 		"nextday",
 		"optim",
+		"pbar",
 		"randn",
 		"refreshtoken",
 		"relu",

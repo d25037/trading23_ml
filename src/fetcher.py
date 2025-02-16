@@ -94,12 +94,13 @@ def fetch_tokens():
 
 
 @app.command("daily-quotes")
-def fetch_daily_quotes(code: str, insert_db: bool = False):
+def fetch_daily_quotes(code: str, insert_db: bool = False, with_info: bool = False):
     app_settings = load_settings()
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
     params = {"code": code}
 
-    logger.info("Fetch Daily Quotes")
+    if with_info:
+        logger.info("Fetch Daily Quotes")
 
     r = requests.get(
         "https://api.jquants.com/v1/prices/daily_quotes",
@@ -111,7 +112,8 @@ def fetch_daily_quotes(code: str, insert_db: bool = False):
         logger.error(r.json())
         return
 
-    logger.info(f"Successfully fetched Daily Quotes of {code}")
+    if with_info:
+        logger.info(f"Successfully fetched Daily Quotes of {code}")
     daily_quotes = schemas.DailyQuotes(**r.json())
     logger.debug(daily_quotes.daily_quotes)
     logger.debug(f"len: {len(daily_quotes.daily_quotes)}")
