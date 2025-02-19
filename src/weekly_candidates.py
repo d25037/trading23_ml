@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from sys import stderr
 from typing import Optional
@@ -12,6 +13,133 @@ import fetcher
 import schemas
 
 app = Typer(no_args_is_help=True)
+
+
+@app.command()
+def daily_backtest(days: int = 0):
+    """
+    デイリーバックテストを実行し、結果をファイルに保存する。
+    """
+    logger.remove()
+    logger.add(stderr, level="INFO")
+
+    # ロング候補とショート候補の銘柄コードを取得
+    long_candidates = open_latest_file(schemas.StockStatus.BULLISH)
+    if long_candidates is None:
+        return
+    short_candidates = open_latest_file(schemas.StockStatus.BEARISH)
+    if short_candidates is None:
+        return
+
+    # 当日のリターンを計算
+    long_results = calculate_daily_returns(long_candidates, days=days)
+    short_results = calculate_daily_returns(short_candidates, days=days)
+
+    # 結果をサマライズ
+    long_summary = summarize_results(long_results)
+    short_summary = summarize_results(short_results)
+
+    logger.info("ロング候補の結果")
+    logger.info(long_summary)
+    logger.info("ショート候補の結果")
+    logger.info(short_summary)
+
+
+def summarize_results(results: list[dict]) -> dict:
+    """
+    バックテスト結果のリストを受け取り、
+    結果を集計して返す。
+
+    Parameters:
+        results (list[dict]): バックテスト結果のリスト
+
+    Returns:
+        dict: 集計結果
+    """
+    total = 0
+    positive_count = 0
+    for result in results:
+        if result is None:
+            continue
+        total += result["result"]
+        if result["result"] > 0:
+            positive_count += 1
+
+    if positive_count == 0:
+        return {"return_average": 0, "positive_count": 0}
+
+    # 平均リターンを計算
+    return_average = round(total / len(results), 2)
+    # 上昇した銘柄の割合を計算
+    win_ratio = round(positive_count / len(results), 2)
+
+    return {"win_ratio": win_ratio, "return_average": return_average}
+
+
+def calculate_daily_returns(code_list: list[str], days: int = 0) -> list[dict]:
+    """
+    指定された複数の銘柄コードについてデイリーバックテストを実行し、
+    結果のリストを返す。
+    """
+    results = []
+    pbar = tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR, desc="Processing")
+
+    for code in pbar:
+        pbar.set_description(f"Processing: {code}")
+        df = fetcher.fetch_daily_quotes(code)
+        if df is None:
+            continue
+
+        close = df["close"].item(-1 - days)
+        previous_close = df["close"].item(-2 - days)
+        result = round(100 * (close - previous_close) / previous_close, 2)
+        results.append({"code": code, "result": result})
+
+    return results
+
+
+def open_latest_file(status: schemas.StockStatus):
+    """
+    outputs/jp ディレクトリ内のファイルを読み込み、
+    最新のロング候補またはショート候補の銘柄コードを取得する。
+    """
+
+    path = "./outputs/jp"
+    files = os.listdir(path)
+
+    # files を降順にソート
+    files.sort(reverse=True)
+
+    # status に応じてファイルを選択
+    if status == schemas.StockStatus.BULLISH:
+        selected_files = [file for file in files if "long" in file]
+    elif status == schemas.StockStatus.BEARISH:
+        selected_files = [file for file in files if "short" in file]
+    else:
+        return
+
+    logger.debug(selected_files)
+
+    latest_file = os.path.join(path, selected_files[0])
+    with open(latest_file, "r") as file:
+        data = file.read().strip()
+
+    # カンマで区切ってリストにする
+    tokens = [token.strip() for token in data.split(",") if token.strip()]
+
+    # "TSE:" を除去して整数に変換
+    candidate_ids = []
+    for token in tokens:
+        if token.startswith("TSE:"):
+            num_part = token[len("TSE:") :]
+            try:
+                candidate_ids.append(int(num_part))
+            except ValueError:
+                # 数字に変換できなかった場合はスキップ
+                pass
+    logger.debug(candidate_ids)
+
+    return candidate_ids
 
 
 @app.command()
@@ -116,7 +244,7 @@ def save_candidates(candidates: list[str], is_long: bool, now_str: str):
     candidates_str = ",".join(candidates)
     with open(f"outputs/{filename}.txt", "w") as file:
         file.write(candidates_str)
-        logger.info(f"outputs/{filename}.txt に保存しました。")
+        logger.info(f"outputs/jp/{filename}.txt に保存しました。")
 
 
 @app.command()
