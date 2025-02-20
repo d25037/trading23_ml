@@ -1,16 +1,18 @@
 import datetime
 import json
 from sys import stderr
+from typing import Optional
 
 import polars as pl
 import requests
 from loguru import logger
 from tqdm import tqdm
-from typer import Typer
+from typer import Exit, Option, Typer, echo
 
 import constants
 import schemas
 from database import insert_ohlc
+from utils import notify
 
 app = Typer(no_args_is_help=True)
 
@@ -41,15 +43,15 @@ def fetch_refresh_token():
     app_settings = load_settings()
     body = {"mailaddress": app_settings.mailaddress, "password": app_settings.password}
 
-    logger.info("Fetch Refresh token...")
+    notify("Fetch Refresh token...")
 
     r_post = requests.post(
         "https://api.jquants.com/v1/token/auth_user", data=json.dumps(body)
     )
     if r_post.status_code == 200:
-        logger.info("Refresh token was successfully fetched.")
+        notify("Refresh token was successfully fetched.")
     else:
-        logger.error(f"Failed to fetch Refresh token: {r_post.status_code}")
+        notify(f"Failed to fetch Refresh token: {r_post.status_code}", "error")
         return
 
     refresh_token = schemas.RefreshToken(**r_post.json()).refresh_token
@@ -57,7 +59,7 @@ def fetch_refresh_token():
     with open(f"{constants.APP_SETTINGS_PATH}", "w") as f:
         json.dump(app_settings.model_dump(), f)
 
-    logger.info(f"Refresh token was saved to {constants.APP_SETTINGS_PATH}")
+    notify(f"Refresh token was saved to {constants.APP_SETTINGS_PATH}")
 
 
 @app.command("id-token")
@@ -65,16 +67,16 @@ def fetch_id_token():
     app_settings = load_settings()
     params = {"refreshtoken": app_settings.refresh_token}
 
-    logger.info("Fetch ID token...")
+    notify("Fetch ID token...")
 
     r_post = requests.post(
         "https://api.jquants.com/v1/token/auth_refresh", params=params
     )
     if r_post.status_code == 200:
-        logger.info("ID token was successfully fetched.")
+        notify("ID token was successfully fetched.")
     else:
-        logger.error(f"Failed to fetch ID token: {r_post.status_code}")
-        logger.error(r_post.json())
+        notify(f"Failed to fetch ID token: {r_post.status_code}", "error")
+        notify(r_post.json(), "error")
         return
 
     id_token = schemas.IdToken(**r_post.json()).id_token
@@ -82,22 +84,29 @@ def fetch_id_token():
     with open(f"{constants.APP_SETTINGS_PATH}", "w") as f:
         json.dump(app_settings.model_dump(), f)
 
-    logger.info(f"ID token was saved to {constants.APP_SETTINGS_PATH}")
+    notify(f"ID token was saved to {constants.APP_SETTINGS_PATH}")
 
 
 @app.command("tokens")
 def fetch_tokens():
-    logger.remove()
-    logger.add(stderr, level="INFO")
     fetch_refresh_token()
     fetch_id_token()
 
 
 @app.command("daily-quotes")
-def fetch_daily_quotes(code: str, insert_db: bool = False, with_info: bool = False):
+def fetch_daily_quotes(
+    code: str,
+    insert_db: bool = False,
+    with_info: bool = False,
+    to: Optional[str] = Option(
+        None, help="JQuants APIからfetchしてくる最新の日付(YYYYMMDD形式)"
+    ),
+):
     app_settings = load_settings()
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
     params = {"code": code}
+    if type(to) is str and len(to) == 8:
+        params["to"] = to
 
     if with_info:
         logger.info("Fetch Daily Quotes")
@@ -108,9 +117,11 @@ def fetch_daily_quotes(code: str, insert_db: bool = False, with_info: bool = Fal
         params=params,
     )
     if r.status_code != 200:
-        logger.error(f"Failed to fetch Daily Quotes: {r.status_code}")
+        message = f"Failed to fetch Daily Quotes: {r.status_code}"
+        echo(message)
+        logger.error(message)
         logger.error(r.json())
-        return
+        raise Exit(1)
 
     if with_info:
         logger.info(f"Successfully fetched Daily Quotes of {code}")
@@ -128,9 +139,6 @@ def fetch_daily_quotes(code: str, insert_db: bool = False, with_info: bool = Fal
 
 @app.command("nikkei225")
 def fetch_nikkei225():
-    logger.remove()
-    logger.add(stderr, level="INFO")
-
     nikkei225 = load_csv(schemas.CsvFile.NIKKEI225)
     code_list = nikkei225.get_column("code").to_list()
     for code in tqdm(code_list):
@@ -139,9 +147,6 @@ def fetch_nikkei225():
 
 @app.command("topix400")
 def fetch_topix400():
-    logger.remove()
-    logger.add(stderr, level="INFO")
-
     topix400 = load_csv(schemas.CsvFile.TOPIX400)
     code_list = topix400.get_column("code").to_list()
     for code in tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR):
@@ -153,15 +158,15 @@ def fetch_topix(insert_db: bool = False):
     app_settings = load_settings()
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
 
-    logger.info("Fetch Topix")
+    notify("Fetch Topix")
 
     r = requests.get(
         "https://api.jquants.com/v1/indices/topix",
         headers=headers,
     )
     if r.status_code != 200:
-        logger.error(f"Failed to fetch Topix: {r.status_code}")
-        logger.error(r.json())
+        notify(f"Failed to fetch Topix: {r.status_code}", "error")
+        notify(r.json(), "error")
         return
 
     logger.info("Successfully fetched Topix")

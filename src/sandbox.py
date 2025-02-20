@@ -7,7 +7,7 @@ from loguru import logger
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
-from typer import Typer
+from typer import Typer, echo
 
 import analyzer
 import constants
@@ -17,6 +17,12 @@ import schemas
 import train
 
 app = Typer()
+
+
+@app.command()
+def calc_nikkei(today: float, yesterday: float):
+    nikkei = round((today - yesterday) / yesterday * 100, 2)
+    echo(nikkei)
 
 
 @app.command()
@@ -30,21 +36,6 @@ def test_tqdm():
         pbar.set_postfix({"message": f"ロング候補に追加: {code}"})
         pbar.set_description(f"Processing {code}")
         time.sleep(0.1)
-
-
-@app.command()
-def to_text():
-    buffer = ""
-    list = [2234, 4533, 9752]
-    for item in list:
-        buffer = f"{buffer},TSE:{item}"
-    # bufferの2文字目からにする
-    buffer = buffer[1:]
-    logger.debug(buffer)
-    # bufferをoutputsディレクトリに.txtファイルとして出力
-    with open("outputs/stock_list.txt", "w") as f:
-        f.write(buffer)
-    return
 
 
 @app.command()

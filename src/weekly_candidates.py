@@ -1,27 +1,27 @@
 import os
 from datetime import datetime
-from sys import stderr
 from typing import Optional
 
 import polars as pl
 from loguru import logger
-from tqdm import tqdm
-from typer import Typer
+from typer import Argument, Option, Typer
 
-import constants
 import fetcher
 import schemas
+from utils import create_progress_bar, format_json, notify
 
 app = Typer(no_args_is_help=True)
 
 
 @app.command()
-def daily_backtest(days: int = 0):
+def daily_backtest(
+    to: Optional[str] = Option(
+        None, help="JQuants APIからfetchしてくる最新の日付(YYYYMMDD形式)"
+    ),
+):
     """
     デイリーバックテストを実行し、結果をファイルに保存する。
     """
-    logger.remove()
-    logger.add(stderr, level="INFO")
 
     # ロング候補とショート候補の銘柄コードを取得
     long_candidates = open_latest_file(schemas.StockStatus.BULLISH)
@@ -32,20 +32,20 @@ def daily_backtest(days: int = 0):
         return
 
     # 当日のリターンを計算
-    long_results = calculate_daily_returns(long_candidates, days=days)
-    short_results = calculate_daily_returns(short_candidates, days=days)
+    long_results = calculate_daily_returns(long_candidates, to=to)
+    short_results = calculate_daily_returns(short_candidates, to=to)
 
     # 結果をサマライズ
     long_summary = summarize_results(long_results)
     short_summary = summarize_results(short_results)
 
-    logger.info("ロング候補の結果")
-    logger.info(long_summary)
-    logger.info("ショート候補の結果")
-    logger.info(short_summary)
+    notify("ロング候補の結果")
+    notify(format_json(long_summary))
+    notify("ショート候補の結果")
+    notify(format_json(short_summary))
 
 
-def summarize_results(results: list[dict]) -> dict:
+def summarize_results(daily_results: list[schemas.DailyResults]) -> dict:
     """
     バックテスト結果のリストを受け取り、
     結果を集計して返す。
@@ -56,44 +56,114 @@ def summarize_results(results: list[dict]) -> dict:
     Returns:
         dict: 集計結果
     """
-    total = 0
-    positive_count = 0
-    for result in results:
-        if result is None:
-            continue
-        total += result["result"]
-        if result["result"] > 0:
-            positive_count += 1
+    latest_total = 0.0
+    two_days_ago_total = 0.0
+    three_days_ago_total = 0.0
+    four_days_ago_total = 0.0
+    five_days_ago_total = 0.0
 
-    if positive_count == 0:
-        return {"return_average": 0, "positive_count": 0}
+    latest_positive_count = 0
+    two_days_ago_positive_count = 0
+    three_days_ago_positive_count = 0
+    four_days_ago_positive_count = 0
+    five_days_ago_positive_count = 0
+    for daily_result in daily_results:
+        latest_total += daily_result.latest_result
+        two_days_ago_total += daily_result.two_days_ago_result
+        three_days_ago_total += daily_result.three_days_ago_result
+        four_days_ago_total += daily_result.four_days_ago_result
+        five_days_ago_total += daily_result.five_days_ago_result
+
+        if daily_result.latest_result > 0:
+            latest_positive_count += 1
+        if daily_result.two_days_ago_result > 0:
+            two_days_ago_positive_count += 1
+        if daily_result.three_days_ago_result > 0:
+            three_days_ago_positive_count += 1
+        if daily_result.four_days_ago_result > 0:
+            four_days_ago_positive_count += 1
+        if daily_result.five_days_ago_result > 0:
+            five_days_ago_positive_count += 1
 
     # 平均リターンを計算
-    return_average = round(total / len(results), 2)
+    latest_return_average = round(latest_total / len(daily_results), 2)
+    two_days_ago_return_average = round(two_days_ago_total / len(daily_results), 2)
+    three_days_ago_return_average = round(three_days_ago_total / len(daily_results), 2)
+    four_days_ago_return_average = round(four_days_ago_total / len(daily_results), 2)
+    five_days_ago_return_average = round(five_days_ago_total / len(daily_results), 2)
     # 上昇した銘柄の割合を計算
-    win_ratio = round(positive_count / len(results), 2)
+    latest_win_ratio = round(latest_positive_count / len(daily_results), 2)
+    two_days_ago_win_ratio = round(two_days_ago_positive_count / len(daily_results), 2)
+    three_days_ago_win_ratio = round(
+        three_days_ago_positive_count / len(daily_results), 2
+    )
+    four_days_ago_win_ratio = round(
+        four_days_ago_positive_count / len(daily_results), 2
+    )
+    five_days_ago_win_ratio = round(
+        five_days_ago_positive_count / len(daily_results), 2
+    )
 
-    return {"win_ratio": win_ratio, "return_average": return_average}
+    return {
+        "latest_return_average": latest_return_average,
+        "two_days_ago_return_average": two_days_ago_return_average,
+        "three_days_ago_return_average": three_days_ago_return_average,
+        "four_days_ago_return_average": four_days_ago_return_average,
+        "five_days_ago_return_average": five_days_ago_return_average,
+        "latest_win_ratio": latest_win_ratio,
+        "two_days_ago_win_ratio": two_days_ago_win_ratio,
+        "three_days_ago_win_ratio": three_days_ago_win_ratio,
+        "four_days_ago_win_ratio": four_days_ago_win_ratio,
+        "five_days_ago_win_ratio": five_days_ago_win_ratio,
+    }
 
 
-def calculate_daily_returns(code_list: list[str], days: int = 0) -> list[dict]:
+def calculate_daily_returns(
+    code_list: list[str], to: Optional[str] = None
+) -> list[schemas.DailyResults]:
     """
     指定された複数の銘柄コードについてデイリーバックテストを実行し、
     結果のリストを返す。
     """
     results = []
-    pbar = tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR, desc="Processing")
+    pbar = create_progress_bar(code_list)
 
     for code in pbar:
         pbar.set_description(f"Processing: {code}")
-        df = fetcher.fetch_daily_quotes(code)
-        if df is None:
-            continue
+        df = fetcher.fetch_daily_quotes(code, to=to)
 
-        close = df["close"].item(-1 - days)
-        previous_close = df["close"].item(-2 - days)
-        result = round(100 * (close - previous_close) / previous_close, 2)
-        results.append({"code": code, "result": result})
+        latest_close = df["close"].item(-1)
+        one_day_ago_close = df["close"].item(-2)
+        two_days_ago_close = df["close"].item(-3)
+        three_days_ago_close = df["close"].item(-4)
+        four_days_ago_close = df["close"].item(-5)
+        five_days_ago_close = df["close"].item(-6)
+
+        latest_result = round(
+            100 * (latest_close - one_day_ago_close) / one_day_ago_close, 2
+        )
+        two_days_ago_result = round(
+            100 * (one_day_ago_close - two_days_ago_close) / two_days_ago_close, 2
+        )
+        three_days_ago_result = round(
+            100 * (two_days_ago_close - three_days_ago_close) / three_days_ago_close, 2
+        )
+        four_days_ago_result = round(
+            100 * (three_days_ago_close - four_days_ago_close) / four_days_ago_close, 2
+        )
+        five_days_ago_result = round(
+            100 * (four_days_ago_close - five_days_ago_close) / five_days_ago_close, 2
+        )
+
+        daily_result = schemas.DailyResults(
+            code=str(code),
+            latest_result=latest_result,
+            two_days_ago_result=two_days_ago_result,
+            three_days_ago_result=three_days_ago_result,
+            four_days_ago_result=four_days_ago_result,
+            five_days_ago_result=five_days_ago_result,
+        )
+        results.append(daily_result)
 
     return results
 
@@ -143,14 +213,20 @@ def open_latest_file(status: schemas.StockStatus):
 
 
 @app.command()
-def analyze_weekly_stock_candidates():
+def analyze_weekly_stock_candidates(
+    to: Optional[str] = Option(
+        None, help="JQuants APIからfetchしてくる最新の日付(YYYYMMDD形式)"
+    ),
+):
     """
     日経225の各銘柄について週足データを作成し、
     SMAの条件に応じてロング候補とショート候補を判定・追加し、
     結果をファイルに保存する。
     """
-    logger.remove()
-    logger.add(stderr, level="INFO")
+
+    date = to if to else datetime.now().strftime("%Y%m%d")
+    message = f"基準日{date} 週足データの作成を開始します。"
+    notify(message)
 
     # CSVから日経225のコード一覧を取得
     nikkei225 = fetcher.load_csv(schemas.CsvFile.NIKKEI225)
@@ -158,29 +234,24 @@ def analyze_weekly_stock_candidates():
 
     long_candidates, short_candidates = [], []
 
-    pbar = tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR, desc="Processing")
+    pbar = create_progress_bar(code_list)
 
     for code in pbar:
         pbar.set_description(f"Processing: {code}")
 
-        df = make_ohlc_weekly(code)
-        if df is None:
-            pbar.set_postfix(
-                {"message": f"データが存在しないため {code} はスキップします。"}
-            )
-            continue
+        df = make_ohlc_weekly(code, to=to)
 
         stock_status = check_stock_weekly(df)
-        message = None
+        pbar_message: Optional[str] = None
         if stock_status == schemas.StockStatus.BULLISH:
             add_candidate_weekly(long_candidates, code)
-            message = f"ロング候補に追加 {code}"
+            pbar_message = f"ロング候補に追加 {code}"
         elif stock_status == schemas.StockStatus.BEARISH:
             add_candidate_weekly(short_candidates, code)
-            message = f"ショート候補に追加 {code}"
+            pbar_message = f"ショート候補に追加 {code}"
 
-        if message:
-            pbar.set_postfix({"message": message})
+        if pbar_message:
+            pbar.set_postfix({"message": pbar_message})
 
     # 現在日時を付与して結果を保存
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -218,14 +289,22 @@ def check_stock_weekly(df: pl.DataFrame) -> schemas.StockStatus:
         and sma75 > previous_sma75
         and recent_volume_sum >= previous_volume_sum * 0.7
     )
+
     if is_bullish:
         return schemas.StockStatus.BULLISH
 
+    # # ショート候補の判定条件
+    # is_bearish = (
+    #     close_price < sma25 < sma75
+    #     and sma75 < previous_sma75
+    #     and recent_volume_sum <= previous_volume_sum * 1.3
+    # )
+
     # ショート候補の判定条件
     is_bearish = (
-        close_price < sma25 < sma75
-        and sma75 < previous_sma75
-        and recent_volume_sum <= previous_volume_sum * 1.3
+        close_price > sma75
+        and close_price < sma25
+        and recent_volume_sum <= previous_volume_sum
     )
     if is_bearish:
         return schemas.StockStatus.BEARISH
@@ -242,27 +321,32 @@ def save_candidates(candidates: list[str], is_long: bool, now_str: str):
     long_or_short = "long" if is_long else "short"
     filename = f"{long_or_short}_candidates_{now_str}"
     candidates_str = ",".join(candidates)
-    with open(f"outputs/{filename}.txt", "w") as file:
+    with open(f"outputs/jp/{filename}.txt", "w") as file:
         file.write(candidates_str)
-        logger.info(f"outputs/jp/{filename}.txt に保存しました。")
+        message = f"outputs/jp/{filename}.txt に保存しました。"
+        notify(message)
 
 
 @app.command()
-def make_ohlc_weekly(code: str) -> Optional[pl.DataFrame]:
+def make_ohlc_weekly(
+    code: str = Argument(..., help="Jquants APIからfetchしてくる銘柄コード"),
+    to: Optional[str] = Option(
+        None, help="JQuants APIからfetchしてくる最新の日付(YYYYMMDD形式)"
+    ),
+) -> pl.DataFrame:
     """
     指定された銘柄コードの株価データ（日足）を取得し、
     週足のOHLCデータに集約、さらに25週・75週のSMAを計算して返す。
 
     Parameters:
         code (str): 銘柄コード
+        to (Optional[str]): 取得するデータの最新日付。指定しない場合は最新のデータを取得する。
 
     Returns:
         Optional[pl.DataFrame]: 週足に集約されたデータ。データが取得できない場合は None を返す。
     """
     # 日足データを取得
-    daily_df = fetcher.fetch_daily_quotes(code)
-    if daily_df is None:
-        return None
+    daily_df = fetcher.fetch_daily_quotes(code, to=to)
 
     # 日付を Date 型に変換してソート
     daily_df = daily_df.with_columns(

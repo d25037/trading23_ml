@@ -98,3 +98,12 @@ class StockStatus(Enum):
     BULLISH = "Bullish"
     BEARISH = "Bearish"
     NEUTRAL = "Neutral"
+
+
+class DailyResults(BaseModel):
+    code: str
+    latest_result: float
+    two_days_ago_result: float
+    three_days_ago_result: float
+    four_days_ago_result: float
+    five_days_ago_result: float
