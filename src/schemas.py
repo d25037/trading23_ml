@@ -1,6 +1,6 @@
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AppSettings(BaseModel):
@@ -19,6 +19,8 @@ class IdToken(BaseModel):
 
 
 class Ohlc(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     code: str = Field(alias="Code")
     date: str = Field(alias="Date")
     open: float | None = Field(alias="AdjustmentOpen")
@@ -107,3 +109,9 @@ class DailyResults(BaseModel):
     three_days_ago_result: float
     four_days_ago_result: float
     five_days_ago_result: float
+
+
+class StockListCsv(BaseModel):
+    code: str
+    name: str
+    category: str

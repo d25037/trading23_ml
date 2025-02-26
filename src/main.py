@@ -1,5 +1,4 @@
 from os import makedirs
-from sys import stderr
 
 from loguru import logger
 from typer import Option, Typer

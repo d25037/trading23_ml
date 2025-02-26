@@ -52,33 +52,65 @@ def open_db():
 
 
 def insert_ohlc(df: pl.DataFrame, table_name: str = "ohlc"):
-    conn = open_db()
-    df_pd: pd.DataFrame = df.to_pandas()
+    with open_db() as conn:
+        df_pd: pd.DataFrame = df.to_pandas()
 
-    df_pd.to_sql(
-        table_name,
-        conn,
-        if_exists="append",
-        index=False,
-        method="multi",
-        chunksize=5000,
-    )
+        df_pd.to_sql(
+            table_name,
+            conn,
+            if_exists="append",
+            index=False,
+            method="multi",
+            chunksize=5000,
+        )
 
-    cursor = conn.cursor()
-    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-    record_count = cursor.fetchone()[0]
-    logger.debug(f"number of records: {record_count}")
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        record_count = cursor.fetchone()[0]
+        logger.debug(f"number of records: {record_count}")
+
+    logger.info(f"Inserted {len(df)} records into {table_name}")
     return
 
 
-def select_ohlc_by_code(conn: sqlite3.Connection, code: str | int):
+def select_ohlc_all_by_code(conn: sqlite3.Connection, code: str | int):
+    if isinstance(code, int):
+        code = str(code)
+
+    code = code + "0"
+    df = pl.read_database(
+        query=f"SELECT * FROM ohlc WHERE code={code}", connection=conn
+    ).drop_nulls()
+
+    # polars DataFrame を辞書のリストに変換してから pydantic で検証
+    records = df.to_dicts()
+    [schemas.Ohlc(**row) for row in records]
+
+    # ["date"]をdatetime型に変換 (with_columnsを用いて)
+    df = df.with_columns([pl.col("date").cast(pl.Date).alias("date")])
+    return df
+
+
+def select_ohlc_one_by_code_latest_date(conn: sqlite3.Connection, code: str | int):
     if isinstance(code, int):
         code = str(code)
 
     code = code + "0"
     return pl.read_database(
-        query=f"SELECT * FROM ohlc WHERE code={code}", connection=conn
+        query=f"SELECT * FROM ohlc WHERE code={code} ORDER BY date DESC LIMIT 1",
+        connection=conn,
     )
+
+
+def delete_ohlc_all_by_code(conn: sqlite3.Connection, code: str | int):
+    if isinstance(code, int):
+        code = str(code)
+
+    code = code + "0"
+    conn.execute(f"DELETE FROM ohlc WHERE code={code}")
+    conn.commit()
+    logger.info(f"Deleted all records with code: {code}")
+    return
 
 
 def select_topix(conn: sqlite3.Connection):

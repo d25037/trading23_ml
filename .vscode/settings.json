@@ -1,12 +1,14 @@
 {
 	"cSpell.words": [
 		"argmax",
+		"backtest",
 		"chunksize",
 		"cudable",
 		"dtype",
 		"figsize",
 		"holidaydivision",
 		"loguru",
+		"MACD",
 		"mailaddress",
 		"mplfinance",
 		"nextday",

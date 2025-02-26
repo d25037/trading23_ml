@@ -1,6 +1,5 @@
 import datetime
 import json
-from sys import stderr
 from typing import Optional
 
 import polars as pl
@@ -10,15 +9,17 @@ from tqdm import tqdm
 from typer import Exit, Option, Typer, echo
 
 import constants
+import custom_error
+import database
 import schemas
 from database import insert_ohlc
-from utils import notify
+from utils import debug_df_lf, notify
 
 app = Typer(no_args_is_help=True)
 
 
 @app.command("settings")
-def load_settings():
+def load_settings() -> schemas.AppSettings:
     with open(f"{constants.APP_SETTINGS_PATH}", "r") as f:
         items = schemas.AppSettings(**json.load(f))
         logger.debug(items)
@@ -26,20 +27,29 @@ def load_settings():
 
 
 @app.command("csv")
-def load_csv(index: schemas.CsvFile):
+def load_csv(index: schemas.CsvFile) -> pl.DataFrame:
     if index == schemas.CsvFile.NIKKEI225:
         file_name = constants.NIKKEI225_PATH
     elif index == schemas.CsvFile.TOPIX400:
         file_name = constants.TOPIX400_PATH
 
     with open(f"{file_name}") as f:
-        df = pl.read_csv(f)
-        logger.debug(df)
+        df = (
+            pl.scan_csv(f)
+            .with_columns(pl.col("code").cast(str).alias("code"))
+            .collect()
+        )
+        # 各行ごとの辞書リストを取得
+        rows = df.to_dicts()
+        # 各行をpydanticモデルで検証
+        [schemas.StockListCsv(**row) for row in rows]
+        debug_df_lf(df)
+
     return df
 
 
 @app.command("refresh-token")
-def fetch_refresh_token():
+def fetch_refresh_token() -> None:
     app_settings = load_settings()
     body = {"mailaddress": app_settings.mailaddress, "password": app_settings.password}
 
@@ -63,7 +73,7 @@ def fetch_refresh_token():
 
 
 @app.command("id-token")
-def fetch_id_token():
+def fetch_id_token() -> None:
     app_settings = load_settings()
     params = {"refreshtoken": app_settings.refresh_token}
 
@@ -88,7 +98,7 @@ def fetch_id_token():
 
 
 @app.command("tokens")
-def fetch_tokens():
+def fetch_tokens() -> None:
     fetch_refresh_token()
     fetch_id_token()
 
@@ -97,39 +107,35 @@ def fetch_tokens():
 def fetch_daily_quotes(
     code: str,
     insert_db: bool = False,
-    with_info: bool = False,
-    to: Optional[str] = Option(
-        None, help="JQuants APIからfetchしてくる最新の日付(YYYYMMDD形式)"
-    ),
-):
-    app_settings = load_settings()
-    headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
-    params = {"code": code}
-    if type(to) is str and len(to) == 8:
-        params["to"] = to
+) -> pl.DataFrame:
+    app_settings: schemas.AppSettings = load_settings()
+    headers: dict[str, str] = {
+        "Authorization": "Bearer {}".format(app_settings.id_token)
+    }
+    params: dict[str, str] = {"code": code}
 
-    if with_info:
-        logger.info("Fetch Daily Quotes")
+    logger.info("Fetch Daily Quotes")
 
     r = requests.get(
         "https://api.jquants.com/v1/prices/daily_quotes",
         headers=headers,
         params=params,
     )
+    if r.status_code == 401:
+        raise custom_error.TokenExpiredError("ID Token has expired.")
+
     if r.status_code != 200:
-        message = f"Failed to fetch Daily Quotes: {r.status_code}"
+        message = f"Failed to fetch Daily Quotes: {r.status_code} {r.json()}"
         echo(message)
         logger.error(message)
         logger.error(r.json())
         raise Exit(1)
 
-    if with_info:
-        logger.info(f"Successfully fetched Daily Quotes of {code}")
+    logger.info(f"Successfully fetched Daily Quotes of {code}")
     daily_quotes = schemas.DailyQuotes(**r.json())
-    logger.debug(daily_quotes.daily_quotes)
-    logger.debug(f"len: {len(daily_quotes.daily_quotes)}")
 
     df = pl.DataFrame(daily_quotes.model_dump()["daily_quotes"])
+    debug_df_lf(df)
 
     if insert_db:
         insert_ohlc(df)
@@ -137,8 +143,35 @@ def fetch_daily_quotes(
     return df
 
 
+@app.command()
+def get_daily_quotes(
+    code: str, latest_market_date: str, force_fetch: bool = False
+) -> pl.DataFrame:
+    with database.open_db() as conn:
+        if force_fetch:
+            # DBから削除して、再取得
+            database.delete_ohlc_all_by_code(conn, code)
+            return fetch_daily_quotes(code, insert_db=True)
+
+        # DBから最新の日付のデータを取得
+        latest_ohlc = database.select_ohlc_one_by_code_latest_date(conn, code)
+
+        if len(latest_ohlc) == 0:
+            # DBにデータがない場合は取得
+            return fetch_daily_quotes(code, insert_db=True)
+
+        if latest_ohlc["date"][0] == latest_market_date:
+            # 最新の日付が最新の市場日付と一致する場合はDBから取得
+            return database.select_ohlc_all_by_code(conn, code)
+        else:
+            # DBから削除して、再取得
+            database.delete_ohlc_all_by_code(conn, code)
+
+    return fetch_daily_quotes(code, insert_db=True)
+
+
 @app.command("nikkei225")
-def fetch_nikkei225():
+def fetch_nikkei225() -> None:
     nikkei225 = load_csv(schemas.CsvFile.NIKKEI225)
     code_list = nikkei225.get_column("code").to_list()
     for code in tqdm(code_list):
@@ -146,7 +179,7 @@ def fetch_nikkei225():
 
 
 @app.command("topix400")
-def fetch_topix400():
+def fetch_topix400() -> None:
     topix400 = load_csv(schemas.CsvFile.TOPIX400)
     code_list = topix400.get_column("code").to_list()
     for code in tqdm(code_list, bar_format=constants.SHORT_PROGRESS_BAR):
@@ -154,28 +187,32 @@ def fetch_topix400():
 
 
 @app.command("topix")
-def fetch_topix(insert_db: bool = False):
+def fetch_topix(
+    insert_db: bool = False, to: Optional[str] = Option(None)
+) -> pl.DataFrame:
     app_settings = load_settings()
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
+    params: dict[str, str] = {}
+    if type(to) is str and len(to) > 0:
+        params["to"] = to
 
-    notify("Fetch Topix")
+    logger.info("Fetch Topix")
 
     r = requests.get(
         "https://api.jquants.com/v1/indices/topix",
         headers=headers,
+        params=params,
     )
     if r.status_code != 200:
         notify(f"Failed to fetch Topix: {r.status_code}", "error")
         notify(r.json(), "error")
-        return
+        raise Exit(1)
 
     logger.info("Successfully fetched Topix")
     topix = schemas.Topix(**r.json())
-    logger.debug(topix.topix)
-    logger.debug(f"len: {len(topix.topix)}")
 
     df = pl.DataFrame(topix.model_dump()["topix"])
-    logger.debug(df)
+    debug_df_lf(df)
 
     if insert_db:
         insert_ohlc(df, table_name="topix")
@@ -183,17 +220,21 @@ def fetch_topix(insert_db: bool = False):
     return df
 
 
-@app.command("training-calendar")
-def fetch_trading_calender():
+@app.command("trading-calendar")
+def fetch_trading_calender() -> pl.LazyFrame:
     app_settings = load_settings()
     today = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)
     day_before_1600 = today - datetime.timedelta(days=1600)
     # today -> YYYY-MM-DD
-    yesterday = yesterday.strftime("%Y-%m-%d")
-    day_before_1600 = day_before_1600.strftime("%Y-%m-%d")
+    yesterday_str = yesterday.strftime("%Y-%m-%d")
+    day_before_1600_str = day_before_1600.strftime("%Y-%m-%d")
     headers = {"Authorization": "Bearer {}".format(app_settings.id_token)}
-    params = {"holidaydivision": 1, "from": f"{day_before_1600}", "to": f"{yesterday}"}
+    params = {
+        "holidaydivision": "1",
+        "from": f"{day_before_1600_str}",
+        "to": f"{yesterday_str}",
+    }
 
     r = requests.get(
         "https://api.jquants.com/v1/markets/trading_calendar",
@@ -201,10 +242,18 @@ def fetch_trading_calender():
         params=params,
     )
     lf = pl.LazyFrame(r.json().get("trading_calendar"))
-    logger.debug(f"len: {len(lf.collect())}")
-    df = lf.select("Date").collect().sample(10).sort("Date")
-    logger.debug(f"len: {df}")
 
-    # logger.debug(df)
-    # logger.debug(f"len: {df}")
-    return
+    debug_df_lf(lf)
+
+    return lf
+
+
+@app.command("latest-market-date")
+def get_latest_market_date() -> str:
+    lf = fetch_trading_calender()
+    # ["HolidayDivision"] == "1" が市場日
+    latest_date = (
+        lf.filter(pl.col("HolidayDivision") == "1").collect().sort("Date")["Date"][-1]
+    )
+    notify(f"最新の取引日: {latest_date}")
+    return latest_date
